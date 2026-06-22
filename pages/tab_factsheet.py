@@ -21,61 +21,68 @@ def _badge(status: str) -> str:
     )
 
 
+def _parse_date(val) -> date | None:
+    if val is None:
+        return None
+    try:
+        d = pd.to_datetime(str(val), dayfirst=True, errors="coerce")
+        return d.date() if pd.notna(d) else None
+    except Exception:
+        return None
+
+
 def _has_termsheet(p: dict) -> bool:
-    """True if the product has enough termsheet data to generate a factsheet."""
+    """True if the product has been loaded with termsheet data."""
     has_underlying = any(
         p.get(f"underlying_{i}") and
         str(p.get(f"underlying_{i}")).strip() not in ("", "nan", "None")
         for i in range(1, 5)
     )
-    has_dates = bool(p.get("fecha_inicio") or p.get("fecha_strike"))
-    return has_underlying and has_dates
+    has_start = bool(p.get("fecha_inicio") or p.get("fecha_strike"))
+    return has_underlying and has_start
 
 
 def _validate(ftype: str, p: dict) -> tuple[bool, str]:
     """
     Returns (is_valid, reason_if_invalid).
-    ftype: "Autocall" | "Vencimiento" | "Ejecutado"
+    Logic based purely on dates and data — not on the status field.
     """
-    status = str(p.get("status") or "").upper()
+    today = date.today()
 
     if ftype == "Autocall":
-        if status != "AUTOCALL":
+        # Valid if at least one autocall observation date is in the past
+        past_obs = [
+            d for i in range(1, 11)
+            if (d := _parse_date(p.get(f"fecha_autocall_{i}"))) and d <= today
+        ]
+        if not past_obs:
             return False, (
-                f"El producto tiene status **{status}**, no AUTOCALL. "
-                "Solo se puede generar el factsheet Autocall cuando el producto "
-                "ya fue llamado anticipadamente."
+                "No hay fechas de observación de autocall en el pasado. "
+                "Se necesita al menos una fecha de observación ya transcurrida "
+                "para que el producto haya podido autocallear."
             )
         return True, ""
 
     if ftype == "Vencimiento":
-        # Allow if status=VENCIDO or fecha_vencimiento is in the past
-        if status == "VENCIDO":
+        # Valid if fecha_obs_final or fecha_vencimiento is in the past
+        obs_final = _parse_date(p.get("fecha_obs_final"))
+        vcto      = _parse_date(p.get("fecha_vencimiento"))
+        if obs_final and obs_final <= today:
             return True, ""
-        vcto = p.get("fecha_vencimiento")
-        if vcto:
-            try:
-                d = pd.to_datetime(str(vcto), dayfirst=True, errors="coerce")
-                if pd.notna(d) and d.date() <= date.today():
-                    return True, ""
-            except Exception:
-                pass
+        if vcto and vcto <= today:
+            return True, ""
+        ref = obs_final or vcto
+        ref_str = ref.strftime("%d/%m/%Y") if ref else "desconocida"
         return False, (
-            f"El producto tiene status **{status}** y su fecha de vencimiento "
-            "aún no ha llegado. Solo se puede generar el factsheet Vencimiento "
-            "cuando el producto ya venció."
+            f"La fecha de observación final / vencimiento ({ref_str}) aún no ha llegado. "
+            "El factsheet Vencimiento solo se puede generar cuando el producto ya venció."
         )
 
     if ftype == "Ejecutado":
-        if status == "POR EJECUTAR":
-            return False, (
-                "El producto está **POR EJECUTAR** — aún no se ha tradeado y "
-                "no tiene termsheet. No se puede generar un factsheet Ejecutado."
-            )
         if not _has_termsheet(p):
             return False, (
-                "El producto no tiene datos de termsheet (subyacentes, fechas). "
-                "Carga primero el termsheet desde el tab de Load Product."
+                "El producto no tiene datos de termsheet (subyacentes ni fecha de inicio). "
+                "Carga primero el termsheet desde el tab **Load Product**."
             )
         return True, ""
 
@@ -177,19 +184,11 @@ def render():
         company_name = cfg.get("company_name") or "My Company"
         primary      = cfg.get("primary_color") or "#CC2200"
 
-        # Override status temporarily so factsheet uses the chosen type
-        product_copy = dict(product)
-        _STATUS_OVERRIDE = {
-            "Autocall":   "AUTOCALL",
-            "Vencimiento": "VENCIDO",
-            "Ejecutado":  "VIGENTE",
-        }
-        product_copy["status"] = _STATUS_OVERRIDE[ftype]
-
         with st.spinner(f"Generating {ftype} factsheet — fetching market data..."):
             try:
                 pdf_bytes = generate_factsheet_pdf(
-                    product=product_copy,
+                    product=product,
+                    event_type=ftype,
                     company_name=company_name,
                     primary=primary,
                 )
@@ -215,7 +214,7 @@ def render():
     st.markdown("---")
     st.caption(
         "**Validación de tipos:**  "
-        "Autocall — solo si status=AUTOCALL  |  "
-        "Vencimiento — solo si status=VENCIDO o fecha de vencimiento ya pasó  |  "
-        "Ejecutado — solo si tiene termsheet y no es POR EJECUTAR"
+        "Autocall — al menos una fecha de observación ya transcurrida  |  "
+        "Vencimiento — fecha de observación final o vencimiento ya pasó  |  "
+        "Ejecutado — producto con termsheet cargado"
     )

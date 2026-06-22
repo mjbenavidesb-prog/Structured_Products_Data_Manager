@@ -285,27 +285,19 @@ def _draw_coupon_table(ax, dates: list, amounts: list, total: float):
 
 # ── Main entry point ───────────────────────────────────────────────────────────
 
-def _event_label(status: str) -> str:
-    s = str(status).upper()
-    if s == "AUTOCALL":
-        return "Autocall"
-    if s == "VENCIDO":
-        return "Vencimiento"
-    return "Ejecutado"
-
-
-def generate_factsheet_pdf(product: dict, company_name: str = "My Company",
+def generate_factsheet_pdf(product: dict,
+                           event_type: str = "Ejecutado",
+                           company_name: str = "My Company",
                            primary: str = "#CC2200") -> BytesIO:
     """
     Generate portrait A4 PDF factsheet.
-    Event type is derived from product['status'].
+    event_type: "Autocall" | "Vencimiento" | "Ejecutado"  (chosen by the user in the UI)
     """
-    px = _hex(primary)
+    px    = _hex(primary)
+    label = event_type   # e.g. "Autocall"
 
     # ── Pull fields ────────────────────────────────────────────────────────────
     nombre   = str(product.get("nombre_producto") or "Structured Product")
-    status   = str(product.get("status") or "VIGENTE")
-    label    = _event_label(status)
     moneda   = str(product.get("moneda") or "USD")
     cpty     = str(product.get("contraparte") or "—")
     perfil   = str(product.get("perfil") or "—")
@@ -338,9 +330,9 @@ def generate_factsheet_pdf(product: dict, company_name: str = "My Company",
     ac_dates = [_parse_date(product.get(f"fecha_autocall_{i}")) for i in range(1, 11)]
     ac_dates = [d for d in ac_dates if d]
 
-    # date the product actually autocalled (last past AC date if AUTOCALL)
+    # For Autocall factsheet: last past observation date = when the product was called
     actual_ac_date = None
-    if status == "AUTOCALL" and ac_dates:
+    if label == "Autocall" and ac_dates:
         past = [d for d in ac_dates if d <= date.today()]
         actual_ac_date = past[-1] if past else ac_dates[0]
     chart_end = actual_ac_date or end_date
@@ -404,7 +396,7 @@ def generate_factsheet_pdf(product: dict, company_name: str = "My Company",
     ]
     if plazo:
         char_rows.append(("Plazo", f"{int(plazo)} meses"))
-    if actual_ac_date or (status in ("AUTOCALL", "VENCIDO")):
+    if ac_dates:   # product has autocall observation schedule
         char_rows.append(("Período sin Autocall", "1er Trimestre"))
         char_rows.append(("Observación Autocall", "Trimestral"))
         char_rows.append(("Observación Cupón",    "Trimestral"))
