@@ -117,8 +117,9 @@ def render():
             hovertemplate="<b>%{label}</b><br>$%{value:,.0f}<br>%{percent}<extra></extra>",
             direction="clockwise", sort=True,
         ))
-        fig.update_layout(
-            **_dark_layout(height=340),
+        fig.update_layout(**_dark_layout(
+            height=340,
+            margin=dict(t=36, b=10, l=10, r=10),
             title=dict(text=title, font=dict(size=13, color=_TEXT), x=0, pad=dict(l=0)),
             annotations=[dict(
                 text=fmt_usd(total),
@@ -126,8 +127,7 @@ def render():
                 font=dict(size=18, color=_TEXT, family="Inter, sans-serif"),
                 showarrow=False,
             )],
-            margin=dict(t=36, b=10, l=10, r=10),
-        )
+        ))
         return fig
 
     def _bar_h(y_vals, x_vals, title):
@@ -141,15 +141,15 @@ def render():
             textfont=dict(color=_TEXT, size=11),
             hovertemplate="<b>%{y}</b><br>$%{x:,.0f}<extra></extra>",
         ))
-        fig.update_layout(
-            **_dark_layout(height=max(300, len(y_vals) * 44 + 60)),
+        fig.update_layout(**_dark_layout(
+            height=max(300, len(y_vals) * 44 + 60),
+            margin=dict(t=36, b=10, l=10, r=80),
             title=dict(text=title, font=dict(size=13, color=_TEXT), x=0, pad=dict(l=0)),
             xaxis=dict(showgrid=False, showticklabels=False, zeroline=False),
             yaxis=dict(gridcolor=_GRID, zeroline=False, autorange="reversed",
                        tickfont=dict(size=12)),
             bargap=0.28,
-            margin=dict(t=36, b=10, l=10, r=80),
-        )
+        ))
         return fig
 
     # ── Row 1: Status donut | Country donut ───────────────────────────────────
@@ -241,15 +241,15 @@ def render():
             fillcolor=_rgba(primary, 0.12),
             hovertemplate="%{x|%d %b %Y}<br><b>$%{y:,.0f}</b><extra></extra>",
         ))
-        fig.update_layout(
-            **_dark_layout(height=240),
+        fig.update_layout(**_dark_layout(
+            height=240,
+            margin=dict(t=36, b=10, l=10, r=10),
             title=dict(text="Evolución AUM", font=dict(size=13, color=_TEXT), x=0),
             xaxis=dict(gridcolor=_GRID, zeroline=False, showline=False,
                        tickfont=dict(size=11)),
             yaxis=dict(gridcolor=_GRID, zeroline=False, showline=False,
                        tickprefix="$", tickfont=dict(size=11)),
-            margin=dict(t=36, b=10, l=10, r=10),
-        )
+        ))
         st.plotly_chart(fig, use_container_width=True)
 
     # ── Product table ───────────────────────────────────────────────────────────
