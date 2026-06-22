@@ -148,12 +148,12 @@ def _dominant_country(row: dict) -> str:
 _GROUP_COL = {
     "AUM por Asset Class":      "asset_class",
     "AUM por Vehículo":         "vehiculo",
-    "AUM por Estrategia":       "tipo_estructura",   # overridden below if missing
+    "AUM por Estrategia":       "estrategia",        # "Estrategia" col from CSV
     "AUM por Perfil de riesgo": "perfil",
     "AUM por Contraparte":      "contraparte",
     "AUM por Segmento":         "tipo",
     "AUM por País":             "_dominant_country",
-    "Portfolio Completo":       "tipo",
+    "Portfolio Completo":       "estrategia",
 }
 
 _COLS = [
@@ -218,13 +218,20 @@ def generate_excel_report(
 
     # ── Group products ─────────────────────────────────────────────────────────
     group_col = _GROUP_COL.get(view, "tipo")
-    # Fallback: tipo_estructura → tipo if column is empty/missing in data
-    if group_col == "tipo_estructura":
+    # Fallback chain: estrategia → tipo_estructura → tipo
+    if group_col in ("estrategia", "tipo_estructura"):
         has_data = any(
-            r.get("tipo_estructura") and
-            str(r.get("tipo_estructura")).strip() not in ("", "nan", "None")
+            r.get(group_col) and
+            str(r.get(group_col)).strip() not in ("", "nan", "None")
             for r in rows
         )
+        if not has_data and group_col == "estrategia":
+            group_col = "tipo_estructura"
+            has_data = any(
+                r.get(group_col) and
+                str(r.get(group_col)).strip() not in ("", "nan", "None")
+                for r in rows
+            )
         if not has_data:
             group_col = "tipo"
 

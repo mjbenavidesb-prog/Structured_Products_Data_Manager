@@ -405,7 +405,12 @@ def render():
         report_df = _view_by_col(filtered, "vehiculo", "Vehículo", primary, "bar")
 
     elif view == "AUM por Estrategia":
-        col = "tipo_estructura" if "tipo_estructura" in filtered.columns else "tipo"
+        if "estrategia" in filtered.columns and filtered["estrategia"].notna().any():
+            col = "estrategia"
+        elif "tipo_estructura" in filtered.columns and filtered["tipo_estructura"].notna().any():
+            col = "tipo_estructura"
+        else:
+            col = "tipo"
         report_df = _view_by_col(filtered, col, "Estrategia", primary, "donut")
 
     elif view == "AUM por Perfil de riesgo":
