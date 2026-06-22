@@ -13,6 +13,12 @@ _TEXT = "#f0f2f6"
 _SUB = "#a0aec0"
 
 
+def _rgba(hex_color: str, alpha: float = 1.0) -> str:
+    h = hex_color.lstrip("#")
+    r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    return f"rgba({r},{g},{b},{alpha})"
+
+
 def fmt_usd(val):
     if pd.isna(val) or val == 0:
         return "$0"
@@ -143,8 +149,8 @@ def render():
                 y=veh_df["Vehicle"],
                 orientation="h",
                 marker=dict(
-                    color=veh_df["AUM"],
-                    colorscale=[[0, palette[0] + "88"], [1, palette[0]]],
+                    color=primary,
+                    opacity=0.85,
                     line=dict(color=_CARD_BG, width=1),
                 ),
                 text=veh_df["AUM"].apply(fmt_usd),
@@ -239,7 +245,7 @@ def render():
             line=dict(color=primary, width=2.5),
             marker=dict(size=5, color=primary),
             fill="tozeroy",
-            fillcolor=primary.rstrip("F") + "22" if len(primary) == 7 else primary + "22",
+            fillcolor=_rgba(primary, 0.15),
             hovertemplate="%{x}<br><b>AUM: $%{y:,.0f}</b><extra></extra>",
         ))
         fig.update_layout(
