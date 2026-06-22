@@ -146,14 +146,14 @@ def _dominant_country(row: dict) -> str:
 
 
 _GROUP_COL = {
-    "AUM por Asset Class":    "asset_class",
-    "AUM por Vehículo":       "vehiculo",
-    "AUM por Estrategia":     "tipo",
+    "AUM por Asset Class":      "asset_class",
+    "AUM por Vehículo":         "vehiculo",
+    "AUM por Estrategia":       "tipo_estructura",   # overridden below if missing
     "AUM por Perfil de riesgo": "perfil",
-    "AUM por Contraparte":    "contraparte",
-    "AUM por Segmento":       "tipo",
-    "AUM por País":           "_dominant_country",
-    "Portfolio Completo":     "tipo",
+    "AUM por Contraparte":      "contraparte",
+    "AUM por Segmento":         "tipo",
+    "AUM por País":             "_dominant_country",
+    "Portfolio Completo":       "tipo",
 }
 
 _COLS = [
@@ -218,6 +218,16 @@ def generate_excel_report(
 
     # ── Group products ─────────────────────────────────────────────────────────
     group_col = _GROUP_COL.get(view, "tipo")
+    # Fallback: tipo_estructura → tipo if column is empty/missing in data
+    if group_col == "tipo_estructura":
+        has_data = any(
+            r.get("tipo_estructura") and
+            str(r.get("tipo_estructura")).strip() not in ("", "nan", "None")
+            for r in rows
+        )
+        if not has_data:
+            group_col = "tipo"
+
     groups: dict[str, list] = {}
     for r in rows:
         key = str(_safe(r.get(group_col), "Sin clasificar"))
