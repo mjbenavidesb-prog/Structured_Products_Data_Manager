@@ -1,15 +1,26 @@
 """
-Factsheet generator for structured investment products.
-Generates a PDF using matplotlib.
-Supports 3 event types: Autocall, Vencimiento, Ejecutado.
+Factsheet PDF generator — portrait A4, matches Credicorp Capital template layout.
+
+Layout (top to bottom):
+  1. Header bar (colored) with badge label + company name
+  2. Section label "DETALLE DEL PRODUCTO"
+  3. Title: "AUTOCALL / VENCIMIENTO / EJECUTADO – Product Name"
+  4. Narrative paragraph
+  5. Two columns: CARACTERÍSTICAS GENERALES (table) | DESEMPEÑO DEL PEOR SUBYACENTE (chart)
+  6. Full-width summary results table
+  7. Section label "EVOLUCIÓN DEL PRODUCTO"
+  8. Subyacente info + product return (right-aligned, colored)
+  9. Two columns: coupon payment table | evolution chart (worst-of normalized)
+  10. Footer note
 """
 
+import textwrap
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-import matplotlib.gridspec as gridspec
-from matplotlib.patches import FancyBboxPatch, Rectangle
+from matplotlib.patches import Rectangle
 import matplotlib.dates as mdates
+from matplotlib.lines import Line2D
 import pandas as pd
 import numpy as np
 from io import BytesIO
@@ -21,25 +32,30 @@ try:
 except ImportError:
     YF_OK = False
 
-from backend.market_data import TICKER_MAP, resolve_ticker
+from backend.market_data import resolve_ticker
 
-
-# ── Colours ────────────────────────────────────────────────────────────────────
-
-_CHART_COLORS = ["#2563EB", "#DC2626", "#F59E0B", "#10B981"]
-_LIGHT_GRAY = "#F3F4F6"
-_MID_GRAY = "#D1D5DB"
-_TEXT = "#111827"
+# ── Palette ────────────────────────────────────────────────────────────────────
+_WHITE   = "#FFFFFF"
+_LIGHT   = "#F5F5F5"
+_GRAY    = "#D1D5DB"
+_DARK    = "#111827"
 _SUBTEXT = "#6B7280"
-_WHITE = "#FFFFFF"
+_LINE_COLORS = ["#1A1A2E", "#DC2626", "#9CA3AF", "#2563EB"]   # dark navy, red, gray, blue
 
-
-# ── Helpers ────────────────────────────────────────────────────────────────────
+# ── Date helpers ───────────────────────────────────────────────────────────────
+_MONTHS_ES = ["Ene","Feb","Mar","Abr","May","Jun",
+               "Jul","Ago","Set","Oct","Nov","Dic"]
 
 def _parse_date(s) -> date | None:
-    if not s or (isinstance(s, float) and np.isnan(s)):
+    if s is None:
         return None
-    for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d-%b-%y", "%d-%b-%Y", "%d-%m-%Y", "%m/%d/%Y"):
+    try:
+        if isinstance(s, (date, datetime)):
+            return s if isinstance(s, date) else s.date()
+    except Exception:
+        pass
+    for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d-%b-%y", "%d-%b-%Y",
+                "%d-%m-%Y", "%m/%d/%Y"):
         try:
             return datetime.strptime(str(s).strip(), fmt).date()
         except ValueError:
@@ -47,534 +63,627 @@ def _parse_date(s) -> date | None:
     return None
 
 
-def _pct(val, decimals=2):
-    if val is None or (isinstance(val, float) and np.isnan(val)):
-        return "—"
-    if abs(val) <= 1.5:
-        val *= 100
-    return f"{val:.{decimals}f}%"
-
-
-def _fmt_date(d: date | None) -> str:
+def _fmt_date(d) -> str:
+    d = _parse_date(d)
     if not d:
         return "—"
-    months_es = ["Ene", "Feb", "Mar", "Abr", "May", "Jun",
-                 "Jul", "Ago", "Set", "Oct", "Nov", "Dic"]
-    return f"{d.day:02d}-{months_es[d.month-1]}-{str(d.year)[2:]}"
+    return f"{d.day:02d}-{_MONTHS_ES[d.month-1]}-{str(d.year)[2:]}"
 
 
-def _hex(color: str):
-    """Ensure color is a valid hex string, fallback to default."""
-    if color and color.startswith("#") and len(color) in (7, 9):
-        return color[:7]
-    return "#2563EB"
+def _safe_float(v, default=None):
+    try:
+        f = float(v)
+        return default if (f != f) else f   # NaN → default
+    except (TypeError, ValueError):
+        return default
 
 
-def _add_header_bar(fig, text: str, primary: str, company_name: str):
-    """Draw the top red/colored header bar with product type label."""
-    ax = fig.add_axes([0, 0.957, 1, 0.043])
-    ax.set_facecolor(_hex(primary))
-    ax.set_xlim(0, 1)
-    ax.set_ylim(0, 1)
-    ax.axis("off")
-    ax.text(0.012, 0.45, text.upper(), fontsize=10, fontweight="bold",
-            color=_WHITE, va="center", ha="left")
-    ax.text(0.988, 0.45, company_name, fontsize=8, color=_WHITE,
-            va="center", ha="right", alpha=0.85)
+def _pct(v, decimals=2):
+    f = _safe_float(v)
+    if f is None:
+        return "—"
+    if abs(f) <= 1.5:
+        f *= 100
+    return f"{f:.{decimals}f}%"
 
 
-def _add_title(fig, title: str, primary: str, top: float):
-    ax = fig.add_axes([0.012, top, 0.976, 0.052])
-    ax.axis("off")
-    ax.text(0, 0.5, title, fontsize=14, fontweight="bold",
-            color=_hex(primary), va="center")
+def _hex(c: str) -> str:
+    if c and c.startswith("#") and len(c) >= 7:
+        return c[:7]
+    return "#CC2200"
 
 
-def _add_section_label(fig, label: str, primary: str, top: float):
-    ax = fig.add_axes([0, top, 1, 0.026])
-    ax.set_facecolor(_hex(primary))
-    ax.axis("off")
-    ax.text(0.012, 0.45, label, fontsize=8, fontweight="bold",
-            color=_WHITE, va="center")
+# ── yfinance price history ─────────────────────────────────────────────────────
+
+def _fetch_prices(tickers: list[str], start: date, end: date) -> pd.DataFrame:
+    """Return DataFrame of normalized prices (100 = start date) per ticker."""
+    if not YF_OK or not tickers or not start:
+        return pd.DataFrame()
+    yf_map   = {t: resolve_ticker(t) for t in tickers if resolve_ticker(t)}
+    inv_map  = {v: k for k, v in yf_map.items()}
+    yf_syms  = list(yf_map.values())
+    s_str    = str(start - timedelta(days=5))
+    e_str    = str((end or date.today()) + timedelta(days=2))
+    try:
+        if len(yf_syms) == 1:
+            raw = yf.download(yf_syms[0], start=s_str, end=e_str,
+                              auto_adjust=True, progress=False)
+            if raw.empty:
+                return pd.DataFrame()
+            closes = raw[["Close"]]
+            closes.columns = yf_syms
+        else:
+            raw = yf.download(yf_syms, start=s_str, end=e_str,
+                              auto_adjust=True, progress=False)
+            if raw.empty:
+                return pd.DataFrame()
+            closes = raw["Close"] if isinstance(raw.columns, pd.MultiIndex) else raw
+
+        closes.index = pd.to_datetime(closes.index).tz_localize(None)
+        closes = closes[closes.index >= pd.Timestamp(start)]
+        if closes.empty:
+            return pd.DataFrame()
+
+        norm = closes / closes.iloc[0] * 100
+        return norm.rename(columns=inv_map)
+    except Exception:
+        return pd.DataFrame()
 
 
-def _draw_table(ax, rows, col_widths=None, header_color="#2563EB"):
-    """Draw a two-column key-value table on ax."""
+def _worst_of(df: pd.DataFrame) -> pd.Series:
+    """Return the worst-performing underlying at each date."""
+    if df.empty:
+        return pd.Series(dtype=float)
+    return df.min(axis=1)
+
+
+# ── Drawing primitives ─────────────────────────────────────────────────────────
+
+def _filled_row(ax, y, h, color):
+    ax.add_patch(Rectangle((0, y), 1, h, transform=ax.transAxes,
+                            facecolor=color, edgecolor="none", zorder=0, clip_on=False))
+
+
+def _header_bar(fig, left, bottom, width, height, bg, label, company, badge_right):
+    ax = fig.add_axes([left, bottom, width, height])
+    ax.set_facecolor(_hex(bg))
+    ax.set_xlim(0, 1); ax.set_ylim(0, 1); ax.axis("off")
+    ax.text(0.008, 0.5, label, color=_WHITE, fontsize=8.5, fontweight="bold",
+            va="center", ha="left")
+    ax.text(0.99, 0.5, company, color=_WHITE, fontsize=7, va="center",
+            ha="right", alpha=0.8)
+
+
+def _section_bar(fig, left, bottom, width, height, bg, label):
+    ax = fig.add_axes([left, bottom, width, height])
+    ax.set_facecolor(_hex(bg))
+    ax.set_xlim(0, 1); ax.set_ylim(0, 1); ax.axis("off")
+    ax.text(0.008, 0.5, label, color=_WHITE, fontsize=7, fontweight="bold",
+            va="center")
+
+
+def _draw_char_table(ax, rows: list[tuple], primary: str):
+    """Two-column key-value table with alternating rows."""
     ax.axis("off")
     n = len(rows)
     if n == 0:
         return
-    row_h = 1.0 / n
+    rh = 1.0 / n
     for i, (k, v) in enumerate(rows):
-        y = 1 - (i + 0.5) * row_h
-        bg = _LIGHT_GRAY if i % 2 == 0 else _WHITE
-        ax.add_patch(Rectangle((0, 1 - (i + 1) * row_h), 1, row_h,
-                                facecolor=bg, edgecolor=_MID_GRAY, linewidth=0.3))
-        ax.text(0.02, y, str(k), fontsize=7.5, fontweight="bold",
-                va="center", color=_TEXT)
-        ax.text(0.98, y, str(v), fontsize=7.5, va="center",
-                ha="right", color=_TEXT)
-    ax.set_xlim(0, 1)
-    ax.set_ylim(0, 1)
+        y = 1 - (i + 1) * rh
+        bg = _LIGHT if i % 2 == 0 else _WHITE
+        ax.add_patch(Rectangle((0, y), 1, rh, facecolor=bg,
+                                edgecolor=_GRAY, linewidth=0.25))
+        ax.text(0.03, y + rh * 0.5, str(k), fontsize=6.5, fontweight="bold",
+                va="center", color=_DARK)
+        ax.text(0.97, y + rh * 0.5, str(v), fontsize=6.5, va="center",
+                ha="right", color=_DARK)
+    ax.set_xlim(0, 1); ax.set_ylim(0, 1)
 
 
-def _performance_chart(ax, tickers, start_date, end_date, barrier_pct, primary):
-    """Plot normalized performance chart."""
-    if not YF_OK or not tickers or not start_date:
-        ax.text(0.5, 0.5, "Price data unavailable", ha="center", va="center",
-                transform=ax.transAxes, color=_SUBTEXT, fontsize=9)
+def _draw_perf_chart(ax, df: pd.DataFrame, barrier: float | None, primary: str, end_date=None):
+    """Line chart of normalized prices with barrier dashed line."""
+    if df.empty:
+        ax.text(0.5, 0.5, "No price data available", ha="center", va="center",
+                transform=ax.transAxes, color=_SUBTEXT, fontsize=8)
+        ax.set_facecolor(_WHITE)
         ax.axis("off")
         return
 
-    end = end_date or date.today()
-    start_str = str(start_date - timedelta(days=3))
-    end_str = str(end + timedelta(days=1))
+    for i, col in enumerate(df.columns):
+        ax.plot(df.index, df[col], color=_LINE_COLORS[i % len(_LINE_COLORS)],
+                linewidth=1.3, label=col)
 
-    yf_syms = [resolve_ticker(t) for t in tickers if resolve_ticker(t)]
-    orig_map = {resolve_ticker(t): t for t in tickers if resolve_ticker(t)}
-
-    try:
-        if len(yf_syms) == 1:
-            raw = yf.download(yf_syms[0], start=start_str, end=end_str,
-                              auto_adjust=True, progress=False)
-            if not raw.empty:
-                closes = raw[["Close"]]
-                closes.columns = yf_syms
-        else:
-            raw = yf.download(yf_syms, start=start_str, end=end_str,
-                              auto_adjust=True, progress=False)
-            closes = raw["Close"] if isinstance(raw.columns, pd.MultiIndex) else raw
-
-        if raw.empty:
-            raise ValueError("empty")
-
-        # Align to start date
-        closes.index = pd.to_datetime(closes.index).tz_localize(None)
-        start_ts = pd.Timestamp(start_date)
-        closes = closes[closes.index >= start_ts]
-        if closes.empty:
-            raise ValueError("empty after filter")
-
-        normalized = closes / closes.iloc[0] * 100
-
-        for i, sym in enumerate(yf_syms):
-            if sym in normalized.columns:
-                label = orig_map.get(sym, sym)
-                color = _CHART_COLORS[i % len(_CHART_COLORS)]
-                ax.plot(normalized.index, normalized[sym], label=label,
-                        color=color, linewidth=1.5)
-
-    except Exception:
-        ax.text(0.5, 0.5, "Chart data not available", ha="center", va="center",
-                transform=ax.transAxes, color=_SUBTEXT, fontsize=9)
-
-    # Barrier line
-    if barrier_pct and barrier_pct > 1:
-        barrier_val = barrier_pct
-    elif barrier_pct:
-        barrier_val = barrier_pct * 100
-    else:
-        barrier_val = None
-
-    if barrier_val:
-        ax.axhline(y=barrier_val, color="#DC2626", linestyle="--",
-                   linewidth=1, alpha=0.8, label=f"Barrier {barrier_val:.0f}%")
+    if barrier is not None:
+        b_pct = barrier * 100 if barrier <= 1 else barrier
+        ax.axhline(y=b_pct, color="#DC2626", linestyle="--",
+                   linewidth=1.0, alpha=0.85)
 
     ax.xaxis.set_major_formatter(mdates.DateFormatter("%b-%y"))
     ax.xaxis.set_major_locator(mdates.MonthLocator())
-    plt.setp(ax.xaxis.get_majorticklabels(), rotation=45, fontsize=6.5)
+    plt.setp(ax.xaxis.get_majorticklabels(), rotation=45, fontsize=6, ha="right")
     ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f"{x:.0f}%"))
-    ax.tick_params(axis="y", labelsize=7)
-    ax.grid(axis="y", linestyle=":", alpha=0.4, color=_MID_GRAY)
+    ax.tick_params(axis="y", labelsize=6.5)
+    ax.grid(axis="y", linestyle=":", linewidth=0.5, alpha=0.4, color=_GRAY)
     ax.set_facecolor(_WHITE)
     ax.spines[["top", "right"]].set_visible(False)
-    ax.spines[["left", "bottom"]].set_color(_MID_GRAY)
-    if ax.get_lines():
-        ax.legend(fontsize=6.5, loc="upper left", framealpha=0.7,
-                  edgecolor=_MID_GRAY, facecolor=_WHITE)
+    ax.spines[["left", "bottom"]].set_color(_GRAY)
+
+    if len(df.columns) > 1:
+        handles = [Line2D([0], [0], color=_LINE_COLORS[i % len(_LINE_COLORS)],
+                          linewidth=1.2, label=c)
+                   for i, c in enumerate(df.columns)]
+        ax.legend(handles=handles, fontsize=5.5, loc="upper left",
+                  framealpha=0.8, edgecolor=_GRAY)
 
 
-def _draw_coupon_table(ax, dates, amount_pct, total_pct, paid_dates_cutoff=None):
-    """Draw the coupon schedule table."""
+def _draw_summary_table(ax, headers: list, values: list, primary: str):
+    """Full-width multi-column results summary."""
     ax.axis("off")
-    headers = ["N°", "Payment Date", "Coupon"]
-    col_x = [0.08, 0.55, 0.92]
-    col_align = ["center", "center", "center"]
+    n = len(headers)
+    if n == 0:
+        return
+    cw = 1.0 / n
 
-    # header
-    for j, h in enumerate(headers):
-        ax.text(col_x[j], 0.96, h, fontsize=7, fontweight="bold",
-                color=_TEXT, ha=col_align[j], va="top", transform=ax.transAxes)
+    # header row
+    for i, h in enumerate(headers):
+        x = i * cw
+        ax.add_patch(Rectangle((x, 0.5), cw, 0.5, facecolor=_hex(primary),
+                                edgecolor=_WHITE, linewidth=0.5))
+        ax.text(x + cw / 2, 0.75, h, fontsize=5.5, fontweight="bold",
+                color=_WHITE, ha="center", va="center")
 
-    ax.axhline(y=0.93, xmin=0, xmax=1, color=_MID_GRAY, linewidth=0.5,
-               transform=ax.transAxes)
+    # values row
+    for i, v in enumerate(values):
+        x = i * cw
+        ax.add_patch(Rectangle((x, 0), cw, 0.5, facecolor=_LIGHT,
+                                edgecolor=_WHITE, linewidth=0.5))
+        ax.text(x + cw / 2, 0.25, str(v), fontsize=5.5, color=_DARK,
+                ha="center", va="center")
 
-    n = len(dates)
-    row_h = 0.88 / (n + 1) if n > 0 else 0.1
-
-    for i, (d, amt) in enumerate(zip(dates, amount_pct)):
-        y = 0.90 - i * row_h
-        bg = _LIGHT_GRAY if i % 2 == 0 else _WHITE
-        ax.add_patch(Rectangle((0, y - row_h * 0.85), 1, row_h * 0.85,
-                                facecolor=bg, edgecolor="none",
-                                transform=ax.transAxes, clip_on=True))
-        paid = paid_dates_cutoff and d <= paid_dates_cutoff
-        color = _TEXT if paid else _SUBTEXT
-        ax.text(col_x[0], y - row_h * 0.4, str(i + 1), fontsize=7,
-                ha="center", va="center", transform=ax.transAxes, color=color)
-        ax.text(col_x[1], y - row_h * 0.4, _fmt_date(d), fontsize=7,
-                ha="center", va="center", transform=ax.transAxes, color=color)
-        ax.text(col_x[2], y - row_h * 0.4, f"{amt:.3f}%", fontsize=7,
-                ha="center", va="center", transform=ax.transAxes, color=color)
-
-    # Total row
-    y_total = 0.90 - n * row_h
-    ax.add_patch(Rectangle((0, y_total - row_h * 0.85), 1, row_h * 0.85,
-                            facecolor=_hex(_CHART_COLORS[0]) + "22",
-                            edgecolor=_MID_GRAY, linewidth=0.3,
-                            transform=ax.transAxes, clip_on=True))
-    ax.text(col_x[1], y_total - row_h * 0.4, "Total paid", fontsize=7.5,
-            ha="center", va="center", transform=ax.transAxes, fontweight="bold",
-            color=_TEXT)
-    ax.text(col_x[2], y_total - row_h * 0.4, f"{total_pct:.3f}%", fontsize=7.5,
-            ha="center", va="center", transform=ax.transAxes, fontweight="bold",
-            color=_TEXT)
+    ax.set_xlim(0, 1); ax.set_ylim(0, 1)
 
 
-def _draw_summary_table(ax, rows, primary):
-    """Draw summary results table (bottom of factsheet)."""
+def _draw_coupon_table(ax, dates: list, amounts: list, total: float):
+    """Numbered coupon payment schedule."""
     ax.axis("off")
-    n_cols = len(rows[0]) if rows else 0
-    n_rows = len(rows)
-    col_w = 1.0 / n_cols if n_cols else 1
+    headers = ["N° de Pago", "Fecha de Pago", "Cupón"]
+    col_x   = [0.12, 0.52, 0.88]
 
-    for r, row in enumerate(rows):
-        for c, cell in enumerate(row):
-            x = c * col_w + col_w / 2
-            y = 1 - r * 0.5 - 0.25
-            bg = _hex(primary) if r == 0 else (_LIGHT_GRAY if r % 2 == 1 else _WHITE)
-            text_color = _WHITE if r == 0 else _TEXT
-            ax.add_patch(Rectangle((c * col_w, 1 - (r + 1) * 0.5), col_w, 0.5,
-                                    facecolor=bg, edgecolor=_WHITE, linewidth=1))
-            ax.text(x, y, str(cell), fontsize=6.5, ha="center", va="center",
-                    color=text_color, fontweight="bold" if r == 0 else "normal",
-                    wrap=True)
-    ax.set_xlim(0, 1)
-    ax.set_ylim(0, n_rows * 0.5)
+    n_rows  = len(dates) + 2   # header + data + total
+    rh      = 1.0 / n_rows
+
+    # header row
+    y_hdr = 1 - rh
+    ax.add_patch(Rectangle((0, y_hdr), 1, rh, facecolor=_GRAY,
+                            edgecolor=_WHITE, linewidth=0.3))
+    for cx, h in zip(col_x, headers):
+        ax.text(cx, y_hdr + rh * 0.5, h, fontsize=6, fontweight="bold",
+                color=_DARK, ha="center", va="center")
+
+    # data rows
+    for i, (d, amt) in enumerate(zip(dates, amounts)):
+        y = 1 - (i + 2) * rh
+        bg = _LIGHT if i % 2 == 0 else _WHITE
+        ax.add_patch(Rectangle((0, y), 1, rh, facecolor=bg,
+                                edgecolor=_WHITE, linewidth=0.25))
+        for cx, val in zip(col_x, [str(i + 1), _fmt_date(d), f"{amt:.3f}%"]):
+            ax.text(cx, y + rh * 0.5, val, fontsize=6,
+                    color=_DARK, ha="center", va="center")
+
+    # total row
+    y_tot = 1 - (len(dates) + 2) * rh
+    ax.add_patch(Rectangle((0, y_tot), 1, rh, facecolor="#E5E7EB",
+                            edgecolor=_WHITE, linewidth=0.3))
+    ax.text(col_x[1], y_tot + rh * 0.5, "Total pagado", fontsize=6.5,
+            fontweight="bold", color=_DARK, ha="center", va="center")
+    ax.text(col_x[2], y_tot + rh * 0.5, f"{total:.3f}%", fontsize=6.5,
+            fontweight="bold", color=_DARK, ha="center", va="center")
+
+    ax.set_xlim(0, 1); ax.set_ylim(0, 1)
 
 
-# ── Main generator ─────────────────────────────────────────────────────────────
+# ── Main entry point ───────────────────────────────────────────────────────────
 
-def generate_factsheet_pdf(product, event_type: str, company_name: str = "My Company",
-                           primary: str = "#2563EB", secondary: str = "#DC2626") -> BytesIO:
+def _event_label(status: str) -> str:
+    s = str(status).upper()
+    if s == "AUTOCALL":
+        return "Autocall"
+    if s == "VENCIDO":
+        return "Vencimiento"
+    return "Ejecutado"
+
+
+def generate_factsheet_pdf(product: dict, company_name: str = "My Company",
+                           primary: str = "#CC2200") -> BytesIO:
     """
-    Generate a PDF factsheet for a structured product.
-
-    event_type: "Autocall" | "Vencimiento" | "Ejecutado"
-    Returns BytesIO containing the PDF.
+    Generate portrait A4 PDF factsheet.
+    Event type is derived from product['status'].
     """
-    p = primary if primary else "#2563EB"
+    px = _hex(primary)
 
-    nombre = str(product.get("nombre_producto") or "Structured Product")
-    isin = str(product.get("isin") or "—")
-    moneda = str(product.get("moneda") or "USD")
-    contraparte = str(product.get("contraparte") or "—")
-    perfil = str(product.get("perfil") or "—")
-    plazo_meses = product.get("plazo_meses")
-    barrera_capital = product.get("barrera_capital")
-    cupon_contingente = product.get("cupon_contingente")
-    cupon_fijo = product.get("cupon_fijo")
-    trigger_autocall = product.get("trigger_autocall")
-    ganancia_maxima = product.get("ganancia_maxima")
-    rendimiento_total = product.get("rendimiento_total")
-    cap = product.get("cap")
-    factor_participacion = product.get("factor_participacion")
+    # ── Pull fields ────────────────────────────────────────────────────────────
+    nombre   = str(product.get("nombre_producto") or "Structured Product")
+    status   = str(product.get("status") or "VIGENTE")
+    label    = _event_label(status)
+    moneda   = str(product.get("moneda") or "USD")
+    cpty     = str(product.get("contraparte") or "—")
+    perfil   = str(product.get("perfil") or "—")
+    isin     = str(product.get("isin") or "—")
+    plazo    = _safe_float(product.get("plazo_meses"))
+    cc       = _safe_float(product.get("cupon_contingente"))   # decimal
+    cf       = _safe_float(product.get("cupon_fijo"))
+    bk       = _safe_float(product.get("barrera_capital"))     # decimal KI level
+    trig     = _safe_float(product.get("trigger_autocall"))
+    gm       = product.get("ganancia_maxima")
+    cap      = _safe_float(product.get("cap"))
+    fpart    = _safe_float(product.get("factor_participacion"))
+    rend     = _safe_float(product.get("rendimiento_total"))
+    asset_cl = str(product.get("asset_class") or "Renta Variable")
+    fmt_sub  = str(product.get("formato_subyacente") or "Worst of")
 
-    # Underlyings
-    underlyings = []
-    strikes = []
-    spots = []
-    for i in range(1, 5):
-        u = product.get(f"underlying_{i}")
-        s = product.get(f"strike_{i}")
-        sp = product.get(f"spot_{i}")
-        if u and str(u).strip() not in ("", "nan", "None"):
-            underlyings.append(str(u).strip())
-            strikes.append(s)
-            spots.append(sp)
+    # underlyings
+    unds   = [product.get(f"underlying_{i}") for i in range(1, 5)]
+    unds   = [str(u).strip() for u in unds if u and str(u).strip() not in ("", "nan", "None")]
+    strikes = [_safe_float(product.get(f"strike_{i}")) for i in range(1, len(unds) + 1)]
+    spots   = [_safe_float(product.get(f"spot_{i}"))   for i in range(1, len(unds) + 1)]
 
-    # Dates
-    start_date = _parse_date(product.get("fecha_inicio") or product.get("fecha_strike"))
-    obs_final = _parse_date(product.get("fecha_obs_final"))
-    maturity = _parse_date(product.get("fecha_vencimiento"))
-    end_date = obs_final or maturity or date.today()
+    # dates
+    d_inicio   = _parse_date(product.get("fecha_inicio") or product.get("fecha_strike"))
+    d_obs_fin  = _parse_date(product.get("fecha_obs_final"))
+    d_vcto     = _parse_date(product.get("fecha_vencimiento"))
+    end_date   = d_obs_fin or d_vcto or date.today()
 
-    # Autocall dates
-    ac_dates = []
-    for i in range(1, 11):
-        d = _parse_date(product.get(f"fecha_autocall_{i}"))
-        if d:
-            ac_dates.append(d)
+    # autocall dates (= coupon observation/payment dates)
+    ac_dates = [_parse_date(product.get(f"fecha_autocall_{i}")) for i in range(1, 11)]
+    ac_dates = [d for d in ac_dates if d]
 
-    # Autocall date (for Autocall type)
-    autocall_actual = _parse_date(product.get("proximo_autocall")) if event_type == "Autocall" else None
-    if not autocall_actual and event_type == "Autocall" and ac_dates:
-        # Use the first past autocall date
-        today = date.today()
-        past = [d for d in ac_dates if d <= today]
-        autocall_actual = past[-1] if past else ac_dates[0]
+    # date the product actually autocalled (last past AC date if AUTOCALL)
+    actual_ac_date = None
+    if status == "AUTOCALL" and ac_dates:
+        past = [d for d in ac_dates if d <= date.today()]
+        actual_ac_date = past[-1] if past else ac_dates[0]
+    chart_end = actual_ac_date or end_date
 
-    # Build barrier display value
-    barrier_display = None
-    if barrera_capital is not None and not np.isnan(float(barrera_capital)):
-        b = float(barrera_capital)
-        barrier_pct = b * 100 if b <= 1 else b
-        barrier_display = f"{(100 - barrier_pct):.0f}%"
-        barrier_for_chart = barrier_pct
-    else:
-        barrier_for_chart = None
+    # ── Barrier display ────────────────────────────────────────────────────────
+    barrier_for_chart = None
+    barrier_display   = "—"
+    if bk is not None:
+        bk_dec = bk if bk <= 1 else bk / 100
+        barrier_for_chart = bk_dec
+        downside = (1 - bk_dec) * 100
+        barrier_display = f"{downside:.0f}%"
 
-    # ── CARACTERÍSTICAS table rows ─────────────────────────────────────────────
-    underlying_str = " / ".join(underlyings) if underlyings else "—"
-
-    char_rows = []
-    char_rows.append(("Asset Class", str(product.get("asset_class") or "Equity")))
-    char_rows.append(("Risk Profile", perfil))
-    char_rows.append(("Underlying(s)", underlying_str))
-    char_rows.append(("Currency", moneda))
-    if plazo_meses:
-        char_rows.append(("Term", f"{plazo_meses} months"))
-    char_rows.append(("Issuer / Counterparty", contraparte))
-    if cupon_contingente and float(cupon_contingente) > 0:
-        char_rows.append(("Annual Contingent Coupon", _pct(cupon_contingente)))
-    if cupon_fijo and float(cupon_fijo) > 0:
-        char_rows.append(("Annual Fixed Coupon", _pct(cupon_fijo)))
-    if ganancia_maxima:
-        gm = str(ganancia_maxima)
-        char_rows.append(("Maximum Gain", gm if "%" in gm else _pct(ganancia_maxima)))
-    if barrier_display:
-        char_rows.append(("Barrier (downside)", barrier_display))
-    if trigger_autocall and float(trigger_autocall) > 0:
-        char_rows.append(("Autocall Trigger", _pct(trigger_autocall)))
-    if cap and float(cap) > 0:
-        char_rows.append(("Cap", _pct(cap)))
-    if factor_participacion and float(factor_participacion) > 0:
-        char_rows.append(("Participation Factor", f"{float(factor_participacion):.2f}x"))
-
-    # Initial and final levels
-    for i, (u, s, sp) in enumerate(zip(underlyings, strikes, spots)):
-        if s and not np.isnan(float(s)):
-            char_rows.append((f"Initial Level ({u})", f"{float(s):,.2f}"))
-    for i, (u, s, sp) in enumerate(zip(underlyings, strikes, spots)):
-        if sp and not np.isnan(float(sp)):
-            char_rows.append((f"Final Level ({u})", f"{float(sp):,.2f}"))
-
-    char_rows.append(("ISIN", isin))
-
-    # ── Coupon schedule ────────────────────────────────────────────────────────
+    # ── Cupon per period ───────────────────────────────────────────────────────
     coupon_dates = []
-    coupon_amts = []
+    coupon_amts  = []
+    total_paid   = None
 
-    if ac_dates and cupon_contingente and float(cupon_contingente) > 0:
-        coupon_pct = float(cupon_contingente)
-        if coupon_pct <= 1:
-            coupon_pct *= 100
-        n_per_year = 4  # default quarterly
+    if ac_dates:
+        # infer frequency
+        n_per_year = 4
         if len(ac_dates) >= 2:
-            delta_days = (ac_dates[1] - ac_dates[0]).days
-            if delta_days > 150:
+            delta = (ac_dates[1] - ac_dates[0]).days
+            if delta > 150:
                 n_per_year = 2
-            elif delta_days > 80:
+            elif delta > 80:
                 n_per_year = 4
-            elif delta_days > 20:
-                n_per_year = 12
-        period_coupon = coupon_pct / n_per_year
 
-        cutoff = autocall_actual or end_date
+        # coupon per period (annualised → period)
+        cc_pct = 0.0
+        if cc is not None:
+            cc_pct = cc * 100 if cc <= 1 else cc
+        elif cf is not None:
+            cc_pct = cf * 100 if cf <= 1 else cf
+
+        period_coupon = cc_pct / n_per_year if cc_pct else 0.0
+
+        cutoff = actual_ac_date or chart_end
         for d in ac_dates:
             if d <= cutoff:
                 coupon_dates.append(d)
                 coupon_amts.append(period_coupon)
 
-    total_paid = rendimiento_total
-    if total_paid is None and coupon_amts:
+    if rend is not None:
+        total_paid = rend * 100 if abs(rend) <= 1 else rend
+    elif coupon_amts:
         total_paid = sum(coupon_amts)
-    elif total_paid is not None:
-        if abs(float(total_paid)) <= 1:
-            total_paid = float(total_paid) * 100
 
-    # ── Build figure ────────────────────────────────────────────────────────────
-    fig = plt.figure(figsize=(11.69, 8.27), facecolor=_WHITE, dpi=150)
-
-    _add_header_bar(fig, event_type, p, company_name)
-    _add_title(fig, f"{event_type.upper()} — {nombre}", p, top=0.895)
-    _add_section_label(fig, "  PRODUCT DETAILS", p, top=0.868)
-
-    # ── Narrative text (Detalle del producto) ──────────────────────────────────
-    ax_text = fig.add_axes([0.012, 0.810, 0.976, 0.055])
-    ax_text.axis("off")
-    narrative = _build_narrative(
-        nombre, event_type, underlyings, start_date, end_date,
-        autocall_actual, cupon_contingente, barrera_capital,
-        rendimiento_total, ganancia_maxima, factor_participacion,
-        cap, cupon_fijo,
+    # ── Characteristics table ──────────────────────────────────────────────────
+    sub_str  = " / ".join(unds) if unds else "—"
+    sub_full = (
+        f"Worst of: {', '.join(unds)}" if fmt_sub.lower().startswith("worst") and len(unds) > 1
+        else sub_str
     )
-    ax_text.text(0, 0.95, narrative, fontsize=7.5, va="top", wrap=True,
-                 color=_TEXT, multialignment="left")
 
-    # ── Two-column layout: table | chart ──────────────────────────────────────
-    _add_section_label(fig, "  GENERAL CHARACTERISTICS", p, top=0.778)
+    char_rows = [
+        ("Tipo de producto",        "Opportunity" if bk else "Nota Estructurada"),
+        ("Clasificación",           f"{asset_cl} – EEUU"),
+        ("Subyacente",              sub_full),
+        ("Moneda",                  "Dólares Americanos" if moneda == "USD" else moneda),
+    ]
+    if plazo:
+        char_rows.append(("Plazo", f"{int(plazo)} meses"))
+    if actual_ac_date or (status in ("AUTOCALL", "VENCIDO")):
+        char_rows.append(("Período sin Autocall", "1er Trimestre"))
+        char_rows.append(("Observación Autocall", "Trimestral"))
+        char_rows.append(("Observación Cupón",    "Trimestral"))
+    char_rows.append(("Riesgo del emisor",         cpty))
+    if cc:
+        cc_display = cc * 100 if cc <= 1 else cc
+        char_rows.append(("Cupón anual contingente", f"{cc_display:.2f}%"))
+    if gm:
+        char_rows.append(("Ganancia Máxima", str(gm) if "%" in str(gm) else f"{gm}"))
+    if barrier_display != "—":
+        char_rows.append(("Barrera", barrier_display))
 
-    n_char_rows = max(len(char_rows), 8)
-    ax_table = fig.add_axes([0.012, 0.460, 0.44, 0.315])
-    _draw_table(ax_table, char_rows, header_color=p)
+    # initial & final levels
+    nivel_inicial_parts = []
+    nivel_final_parts   = []
+    for u, s, sp in zip(unds, strikes, spots):
+        if s is not None:
+            nivel_inicial_parts.append(f"{u}: {s:,.2f}")
+        if sp is not None:
+            nivel_final_parts.append(f"{u}: {sp:,.2f}")
+    if nivel_inicial_parts:
+        char_rows.append(("Nivel Inicial", " / ".join(nivel_inicial_parts)))
+    if nivel_final_parts:
+        char_rows.append(("Nivel Final",   " / ".join(nivel_final_parts)))
+    if isin != "—":
+        char_rows.append(("ISIN / Código", isin))
 
-    ax_chart = fig.add_axes([0.47, 0.460, 0.518, 0.315])
-    ax_chart.set_title("Underlying Performance", fontsize=8, color=_TEXT, pad=4)
-    _performance_chart(ax_chart, underlyings, start_date, end_date,
-                       barrier_for_chart, p)
+    # ── Narrative ──────────────────────────────────────────────────────────────
+    cc_pct_str = f"{(cc*100 if cc and cc<=1 else cc or 0):.2f}%"
+    barrier_ki = f"{(bk*100 if bk and bk<=1 else bk or 0):.0f}%"
+
+    if label == "Autocall":
+        rend_str = f"{total_paid:.3f}%" if total_paid else "—"
+        narrative = (
+            f"El {nombre} fue llamado anticipadamente en la {_ordinal(len(coupon_dates))} "
+            f"fecha de observación de autocall y alcanzó una rentabilidad de {rend_str} para el "
+            f"período comprendido entre el {_fmt_date(d_inicio)} y el {_fmt_date(actual_ac_date)}. "
+            f"El producto brindaba la posibilidad de obtener un cupón anual contingente de {cc_pct_str} "
+            f"si en las observaciones el subyacente estaba por encima del {barrier_ki} de su nivel inicial.\n"
+            f"Si a vencimiento el subyacente se encontraba por debajo del {barrier_ki} de su nivel inicial, "
+            f"el inversionista habría estado expuesto en un 133% al rendimiento negativo del subyacente."
+        )
+    elif label == "Vencimiento":
+        rend_str = f"{total_paid:.3f}%" if total_paid else "—"
+        narrative = (
+            f"El {nombre} fue llamado a su fecha de vencimiento y alcanzó una rentabilidad de {rend_str} "
+            f"para el período comprendido entre el {_fmt_date(d_inicio)} y el {_fmt_date(d_vcto)}. "
+            f"El producto brindaba la posibilidad de obtener un cupón anual contingente de {cc_pct_str} "
+            f"si en las observaciones el subyacente estaba por encima del {barrier_ki} de su nivel inicial."
+        )
+    else:
+        narrative = (
+            f"El {nombre} brinda la posibilidad al inversionista de obtener un cupón contingente "
+            f"de {cc_pct_str} por año, sujeto al comportamiento de los subyacentes seleccionados."
+        )
 
     # ── Summary table ──────────────────────────────────────────────────────────
-    _add_section_label(fig, "  SUMMARY", p, top=0.432)
-    ax_summary = fig.add_axes([0.012, 0.355, 0.976, 0.075])
-
-    if event_type == "Autocall":
-        sum_headers = ["Product", "Start Date", "Maturity Date",
-                       "Autocall Date", "Product Return", "Ann. Return"]
-        ann = None
-        if rendimiento_total and start_date and autocall_actual:
-            days = (autocall_actual - start_date).days
-            rt = float(rendimiento_total)
-            if abs(rt) <= 1:
-                rt *= 100
-            ann = rt / (days / 365) if days > 0 else None
-        sum_vals = [
-            nombre[:30],
-            _fmt_date(start_date),
-            _fmt_date(maturity),
-            _fmt_date(autocall_actual),
-            f"{float(rendimiento_total)*100:.2f}%" if rendimiento_total and abs(float(rendimiento_total)) <= 1 else (f"{float(rendimiento_total):.2f}%" if rendimiento_total else "—"),
-            f"{ann:.2f}%" if ann else "—",
+    if label == "Autocall":
+        sum_hdrs = ["Producto", "Fecha Inicio", "Fecha\nVencimiento",
+                    "Fecha de\nAutocall", "Pago cupón",
+                    "Rend. subyacente", "Rend. del Producto", "Rend. Anualizado"]
+        # compute annualized
+        ann = "—"
+        if total_paid and d_inicio and actual_ac_date:
+            days = (actual_ac_date - d_inicio).days
+            if days > 0:
+                ann = f"{total_paid / (days / 365):.2f}%"
+        sub_rets = [
+            f"{u}: {((sp/s-1)*100 if s and sp and s > 0 else 0):+.2f}%"
+            for u, s, sp in zip(unds, strikes, spots)
+            if s and sp
         ]
-    elif event_type == "Vencimiento":
-        sum_headers = ["Product", "Start Date", "Final Obs. Date",
-                       "Maturity Date", "Product Return", "Ann. Return"]
-        ann = None
-        if rendimiento_total and start_date and end_date:
-            days = (end_date - start_date).days
-            rt = float(rendimiento_total)
-            if abs(rt) <= 1:
-                rt *= 100
-            ann = rt / (days / 365) if days > 0 else None
-        rt_display = f"{float(rendimiento_total)*100:.2f}%" if rendimiento_total and abs(float(rendimiento_total)) <= 1 else (f"{float(rendimiento_total):.2f}%" if rendimiento_total else "—")
-        sum_vals = [nombre[:30], _fmt_date(start_date), _fmt_date(obs_final),
-                    _fmt_date(maturity), rt_display,
-                    f"{ann:.2f}%" if ann else "—"]
+        sub_ret_str = "\n".join(sub_rets) if sub_rets else "—"
+        coupon_label = _fmt_date(coupon_dates[-1]) if coupon_dates else "—"
+        sum_vals = [
+            nombre[:28],
+            _fmt_date(d_inicio),
+            _fmt_date(d_vcto),
+            _fmt_date(actual_ac_date),
+            f"{coupon_amts[-1]:.3f}%" if coupon_amts else "—",
+            sub_ret_str,
+            f"{total_paid:.3f}%" if total_paid else "—",
+            ann,
+        ]
+    elif label == "Vencimiento":
+        sum_hdrs = ["Producto", "Fecha Inicio", "Fecha Obs.\nFinal",
+                    "Fecha\nVencimiento", "Pago cupón",
+                    "Rend. subyacente", "Rend. del Producto", "Rend. Anualizado"]
+        ann = "—"
+        if total_paid and d_inicio and (d_obs_fin or d_vcto):
+            days = ((d_obs_fin or d_vcto) - d_inicio).days
+            if days > 0:
+                ann = f"{total_paid / (days / 365):.2f}%"
+        sub_rets = [
+            f"{u}: {((sp/s-1)*100 if s and sp and s > 0 else 0):+.2f}%"
+            for u, s, sp in zip(unds, strikes, spots) if s and sp
+        ]
+        sum_vals = [
+            nombre[:28],
+            _fmt_date(d_inicio),
+            _fmt_date(d_obs_fin),
+            _fmt_date(d_vcto),
+            f"{coupon_amts[-1]:.3f}%" if coupon_amts else "—",
+            "\n".join(sub_rets) if sub_rets else "—",
+            f"{total_paid:.3f}%" if total_paid else "—",
+            ann,
+        ]
     else:  # Ejecutado
-        sum_headers = ["Product", "Start Date", "Final Obs. Date",
-                       "Maturity Date", "Max. Gain", "ISIN"]
-        gm_str = str(ganancia_maxima) if ganancia_maxima else "—"
-        sum_vals = [nombre[:30], _fmt_date(start_date), _fmt_date(obs_final),
-                    _fmt_date(maturity), gm_str, isin]
+        sum_hdrs = ["Producto", "Fecha Inicio", "Fecha Obs.\nFinal",
+                    "Fecha\nVencimiento", "Ganancia Máx.", "ISIN"]
+        sum_vals = [nombre[:28], _fmt_date(d_inicio), _fmt_date(d_obs_fin),
+                    _fmt_date(d_vcto), str(gm) if gm else "—", isin]
 
-    _draw_summary_table(ax_summary, [sum_headers, sum_vals], p)
+    # ── Fetch price data ───────────────────────────────────────────────────────
+    price_df = _fetch_prices(unds, d_inicio, chart_end) if d_inicio else pd.DataFrame()
+    worst_df = _worst_of(price_df) if not price_df.empty else pd.Series(dtype=float)
 
-    # ── EVOLUCIÓN DEL PRODUCTO ─────────────────────────────────────────────────
-    _add_section_label(fig, "  PRODUCT EVOLUTION", p, top=0.325)
+    # ── Build figure (A4 portrait: 8.27 × 11.69 in) ──────────────────────────
+    fig = plt.figure(figsize=(8.27, 11.69), facecolor=_WHITE, dpi=150)
 
+    # Fixed row heights (inches from top):
+    # 0.00–0.30  header bar
+    # 0.30–0.55  section bar "DETALLE"
+    # 0.55–0.85  title
+    # 0.85–1.45  narrative text
+    # 1.45–1.70  section bar "CARACTERÍSTICAS"
+    # 1.70–5.40  two-column: table | chart  (3.70 in)
+    # 5.40–6.00  summary table
+    # 6.00–6.25  section bar "EVOLUCIÓN"
+    # 6.25–6.55  sub-header (subyacente name + product return)
+    # 6.55–9.75  two-column: coupon table | evolution chart (3.20 in)
+    # 9.75–11.40 footer
+
+    H = 11.69   # total figure height
+
+    def _ax(bottom_in, top_in, left_pct=0.0, width_pct=1.0):
+        """
+        Create axes positioned by inches-from-top-of-page.
+        bottom_in: distance from top of page to the BOTTOM edge of the region
+        top_in:    distance from top of page to the TOP edge (smaller = higher)
+        """
+        b = 1 - bottom_in / H          # figure-coord of the bottom edge
+        h = (bottom_in - top_in) / H   # height in figure coords
+        return fig.add_axes([left_pct, b, width_pct, h])
+
+    # 1. Header bar
+    ax_hdr = _ax(0.30, 0.00)
+    ax_hdr.set_facecolor(px)
+    ax_hdr.axis("off")
+    ax_hdr.set_xlim(0, 1); ax_hdr.set_ylim(0, 1)
+    ax_hdr.text(0.01, 0.5, label.upper(), color=_WHITE,
+                fontsize=9, fontweight="bold", va="center")
+    ax_hdr.text(0.99, 0.5, company_name, color=_WHITE,
+                fontsize=7, va="center", ha="right", alpha=0.85)
+
+    # 2. Section bar "DETALLE"
+    ax_det = _ax(0.55, 0.30)
+    ax_det.set_facecolor(px)
+    ax_det.axis("off")
+    ax_det.set_xlim(0, 1); ax_det.set_ylim(0, 1)
+    ax_det.text(0.01, 0.5, "DETALLE DEL PRODUCTO",
+                color=_WHITE, fontsize=7.5, fontweight="bold", va="center")
+
+    # 3. Title
+    ax_ttl = _ax(0.85, 0.55, left_pct=0.01, width_pct=0.98)
+    ax_ttl.axis("off")
+    ax_ttl.set_xlim(0, 1); ax_ttl.set_ylim(0, 1)
+    ax_ttl.text(0, 0.5, f"{label.upper()} — {nombre}",
+                color=px, fontsize=11, fontweight="bold", va="center")
+
+    # 4. Narrative
+    ax_narr = _ax(1.45, 0.85, left_pct=0.01, width_pct=0.98)
+    ax_narr.axis("off")
+    ax_narr.set_xlim(0, 1); ax_narr.set_ylim(0, 1)
+    wrapped = textwrap.fill(narrative, width=120)
+    ax_narr.text(0, 1.0, wrapped, fontsize=6.8, va="top", color=_DARK,
+                 multialignment="left", transform=ax_narr.transAxes)
+
+    # 5. Section bar "CARACTERÍSTICAS | DESEMPEÑO"
+    ax_csec = _ax(1.70, 1.45, left_pct=0.01, width_pct=0.45)
+    ax_csec.set_facecolor(px)
+    ax_csec.axis("off")
+    ax_csec.set_xlim(0, 1); ax_csec.set_ylim(0, 1)
+    ax_csec.text(0.02, 0.5, "CARACTERÍSTICAS GENERALES",
+                 color=_WHITE, fontsize=6.5, fontweight="bold", va="center")
+
+    ax_dsec = _ax(1.70, 1.45, left_pct=0.48, width_pct=0.51)
+    ax_dsec.set_facecolor(px)
+    ax_dsec.axis("off")
+    ax_dsec.set_xlim(0, 1); ax_dsec.set_ylim(0, 1)
+    ax_dsec.text(0.02, 0.5, "DESEMPEÑO DEL PEOR SUBYACENTE",
+                 color=_WHITE, fontsize=6.5, fontweight="bold", va="center")
+
+    # 6a. Characteristics table
+    ax_ctbl = _ax(5.40, 1.70, left_pct=0.01, width_pct=0.45)
+    _draw_char_table(ax_ctbl, char_rows, px)
+
+    # 6b. Performance chart (all underlyings)
+    ax_perf = _ax(5.40, 1.70, left_pct=0.48, width_pct=0.51)
+    _draw_perf_chart(ax_perf, price_df, barrier_for_chart, px)
+
+    # 7. Summary table
+    ax_sum = _ax(6.00, 5.40, left_pct=0.01, width_pct=0.98)
+    _draw_summary_table(ax_sum, sum_hdrs, sum_vals, px)
+
+    # 8. Section bar "EVOLUCIÓN"
+    ax_esec = _ax(6.25, 6.00)
+    ax_esec.set_facecolor(px)
+    ax_esec.axis("off")
+    ax_esec.set_xlim(0, 1); ax_esec.set_ylim(0, 1)
+    ax_esec.text(0.01, 0.5, "EVOLUCIÓN DEL PRODUCTO",
+                 color=_WHITE, fontsize=7.5, fontweight="bold", va="center")
+
+    # 9. Sub-header: subyacente name + product return
+    ax_subhdr = _ax(6.55, 6.25, left_pct=0.01, width_pct=0.98)
+    ax_subhdr.axis("off")
+    ax_subhdr.set_xlim(0, 1); ax_subhdr.set_ylim(0, 1)
+    ax_subhdr.text(0, 0.5,
+                   f"Subyacente: {sub_full}",
+                   fontsize=6.5, color=_DARK, va="center", fontweight="bold")
+    if total_paid is not None:
+        ax_subhdr.text(0.99, 0.7,
+                       f"Rendimiento producto*: {total_paid:.3f}%",
+                       fontsize=7, color=px, va="center", ha="right",
+                       fontweight="bold")
+        # worst-of return
+        if unds and strikes and spots:
+            wo_rets = [(sp / s - 1) * 100 if s and sp and s > 0 else None
+                       for s, sp in zip(strikes, spots)]
+            wo_rets_clean = [r for r in wo_rets if r is not None]
+            if wo_rets_clean:
+                worst_ret = min(wo_rets_clean)
+                ax_subhdr.text(0.99, 0.3,
+                               f"Rendimiento subyacente: {worst_ret:.2f}%",
+                               fontsize=6.5, color=_SUBTEXT, va="center", ha="right")
+
+    # 10a. Coupon table
+    ax_cpn = _ax(9.75, 6.55, left_pct=0.01, width_pct=0.42)
     if coupon_dates:
-        ax_cpn_hdr = fig.add_axes([0.012, 0.295, 0.44, 0.028])
-        ax_cpn_hdr.axis("off")
-        rend_sub = _fmt_underlying_returns(underlyings, strikes, spots)
-        ax_cpn_hdr.text(0, 0.5, f"Underlying(s): {underlying_str}",
-                        fontsize=7, color=_TEXT, va="center")
-        if rendimiento_total is not None:
-            rt = float(rendimiento_total)
-            rt_pct = rt * 100 if abs(rt) <= 1 else rt
-            ax_cpn_hdr.text(0.99, 0.5, f"Product Return: {rt_pct:.2f}%",
-                            fontsize=8, fontweight="bold", color=_hex(secondary),
-                            ha="right", va="center")
-
-        ax_cpn = fig.add_axes([0.012, 0.075, 0.42, 0.218])
-        _draw_coupon_table(ax_cpn, coupon_dates, coupon_amts,
-                           total_paid or sum(coupon_amts),
-                           paid_dates_cutoff=autocall_actual or end_date)
+        _draw_coupon_table(ax_cpn, coupon_dates, coupon_amts, total_paid or 0)
     else:
-        ax_no_cpn = fig.add_axes([0.012, 0.075, 0.42, 0.248])
-        ax_no_cpn.axis("off")
-        ax_no_cpn.text(0.5, 0.5, "Coupon schedule not applicable\n(Return at maturity)",
-                       ha="center", va="center", fontsize=9, color=_SUBTEXT,
-                       style="italic")
+        ax_cpn.axis("off")
+        ax_cpn.text(0.5, 0.5, "No coupon schedule\n(return at maturity)",
+                    ha="center", va="center", fontsize=8, color=_SUBTEXT,
+                    style="italic", transform=ax_cpn.transAxes)
 
-    # Evolution chart (worst-of performance)
-    ax_evo = fig.add_axes([0.47, 0.075, 0.518, 0.248])
-    ax_evo.set_title("Worst-of Underlying Performance", fontsize=8, color=_TEXT, pad=4)
-    _performance_chart(ax_evo, underlyings, start_date,
-                       autocall_actual or end_date, barrier_for_chart, p)
+    # 10b. Evolution chart (worst-of only)
+    ax_evo = _ax(9.75, 6.55, left_pct=0.45, width_pct=0.54)
+    if not worst_df.empty:
+        _draw_perf_chart(ax_evo,
+                         worst_df.rename("Worst-of").to_frame(),
+                         barrier_for_chart, px)
+    else:
+        _draw_perf_chart(ax_evo, price_df, barrier_for_chart, px)
 
-    # ── Footer ─────────────────────────────────────────────────────────────────
-    ax_footer = fig.add_axes([0.012, 0.005, 0.976, 0.065])
-    ax_footer.axis("off")
+    # 11. Footer
+    ax_foot = _ax(11.60, 9.75, left_pct=0.01, width_pct=0.98)
+    ax_foot.axis("off")
+    ax_foot.set_xlim(0, 1); ax_foot.set_ylim(0, 1)
+    ax_foot.text(0, 0.98,
+                 "*Rentabilidad que se obtendría si el producto venciese en cada día observado.",
+                 fontsize=5, color=_SUBTEXT, va="top", style="italic")
     disclaimer = (
-        "This document is for informational purposes only and does not constitute investment advice. "
-        "Past performance is not indicative of future results. "
-        f"Structured products involve risks including loss of principal. Issued by {contraparte}. "
-        "Generated by Structured Products Manager."
+        f"La rentabilidad esperada no incluye el efecto del impuesto a la renta. "
+        f"El riesgo y rendimiento de los valores reflejan el riesgo y rendimiento de los activos subyacentes. "
+        f"Emisor de la nota: {cpty}. Generado por Structured Products Manager."
     )
-    ax_footer.text(0, 0.8, disclaimer, fontsize=5.5, color=_SUBTEXT,
-                   va="top", wrap=True)
+    ax_foot.text(0, 0.70, disclaimer, fontsize=5, color=_SUBTEXT, va="top", wrap=True)
 
-    # ── Save ───────────────────────────────────────────────────────────────────
+    # ── Save to bytes ──────────────────────────────────────────────────────────
     buf = BytesIO()
-    fig.savefig(buf, format="pdf", bbox_inches="tight", dpi=150, facecolor=_WHITE)
+    fig.savefig(buf, format="pdf", dpi=150, facecolor=_WHITE,
+                bbox_inches=None)
     plt.close(fig)
     buf.seek(0)
     return buf
 
 
-# ── Narrative text builder ─────────────────────────────────────────────────────
-
-def _fmt_underlying_returns(underlyings, strikes, spots):
-    parts = []
-    for u, s, sp in zip(underlyings, strikes, spots):
-        if s and sp and not np.isnan(float(s)) and not np.isnan(float(sp)):
-            ret = (float(sp) / float(s) - 1) * 100
-            parts.append(f"{u}: {ret:+.2f}%")
-    return " / ".join(parts) if parts else ""
-
-
-def _build_narrative(nombre, event_type, underlyings, start_date, end_date,
-                     autocall_date, cupon, barrera, rendimiento,
-                     ganancia_maxima, factor_part, cap, cupon_fijo):
-    sub_str = " and ".join(underlyings) if underlyings else "the underlying asset"
-    start_str = _fmt_date(start_date)
-    end_str = _fmt_date(end_date)
-
-    if event_type == "Autocall":
-        autocall_str = _fmt_date(autocall_date)
-        rt = float(rendimiento) if rendimiento else None
-        rt_pct = (rt * 100 if abs(rt) <= 1 else rt) if rt else None
-        rt_str = f"{rt_pct:.2f}%" if rt_pct else "—"
-        return (
-            f"The {nombre} was called early on {autocall_str}, achieving a return of {rt_str} "
-            f"for the period from {start_str} to {autocall_str}. "
-            f"The product offered a contingent annual coupon of {_pct(cupon)} provided the underlying(s) ({sub_str}) "
-            f"remained above {_pct(barrera)} of their initial level on each observation date."
-        )
-    elif event_type == "Vencimiento":
-        rt = float(rendimiento) if rendimiento else None
-        rt_pct = (rt * 100 if abs(rt) <= 1 else rt) if rt else None
-        rt_str = f"{rt_pct:.2f}%" if rt_pct else "—"
-        return (
-            f"The {nombre} reached its scheduled maturity on {end_str}, delivering a return of {rt_str} "
-            f"for the period from {start_str} to {end_str}. "
-            f"The product offered a contingent annual coupon of {_pct(cupon)} provided the underlying(s) ({sub_str}) "
-            f"remained above {_pct(barrera)} of their initial level."
-        )
-    else:  # Ejecutado
-        gm = str(ganancia_maxima) if ganancia_maxima else _pct(cupon)
-        return (
-            f"The {nombre} offers investors exposure to {sub_str} over a period from {start_str} to {end_str}. "
-            f"The product provides a maximum potential gain of {gm}. "
-            f"Capital protection is subject to the issuer's credit risk and the performance of the underlying(s)."
-        )
+def _ordinal(n: int) -> str:
+    ordinals = {1:"primera",2:"segunda",3:"tercera",4:"cuarta",5:"quinta",
+                6:"sexta",7:"séptima",8:"octava",9:"novena",10:"décima"}
+    return ordinals.get(n, f"{n}a")

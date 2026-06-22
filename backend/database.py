@@ -185,7 +185,14 @@ def seed_from_csv():
         conn.close()
         return True
 
-    df = pd.read_csv(str(CSV_PATH), sep=";", encoding="utf-8-sig", skiprows=4, header=0, low_memory=False)
+    for enc in ("utf-8-sig", "latin-1", "cp1252"):
+        try:
+            df = pd.read_csv(str(CSV_PATH), sep=";", encoding=enc, skiprows=4, header=0, low_memory=False)
+            break
+        except UnicodeDecodeError:
+            continue
+    else:
+        return False
 
     col_map = {
         "Nombre del producto": "nombre_producto",
@@ -333,6 +340,24 @@ def seed_from_csv():
     return rows_inserted
 
 
+_NUMERIC_COLS = [
+    "monto_total", "monto_peru", "monto_chile", "monto_colombia", "monto_usa",
+    "monto_cc_saf", "monto_credibolsa", "monto_agf", "monto_cc_colombia",
+    "monto_asb_bank", "monto_asb_valores", "monto_ccc_llc",
+    "monto_bp_peru", "monto_bp_chile", "monto_bp_colombia", "monto_bp_us",
+    "monto_ria", "monto_w9", "monto_enalta", "monto_bex",
+    "monto_consumo", "monto_juridicos", "monto_mfo", "monto_vicctus",
+    "monto_otros", "monto_tyba",
+    "strike_1", "strike_2", "strike_3", "strike_4",
+    "spot_1", "spot_2", "spot_3", "spot_4",
+    "peso_1", "peso_2", "peso_3", "peso_4",
+    "rendimiento_1", "rendimiento_2", "rendimiento_3", "rendimiento_4",
+    "rendimiento_total", "cupon_fijo", "cupon_contingente", "cap",
+    "factor_participacion", "trigger_autocall", "barrera_cupon", "barrera_capital",
+    "prima_pct", "prima_usd", "notional_derivado", "plazo_meses", "plazo_remanente_dias",
+]
+
+
 def get_all_products(status_filter=None):
     conn = get_connection()
     query = "SELECT * FROM products"
@@ -343,6 +368,9 @@ def get_all_products(status_filter=None):
     else:
         df = pd.read_sql_query(query, conn)
     conn.close()
+    for col in _NUMERIC_COLS:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
     return df
 
 

@@ -63,7 +63,7 @@ def render():
         selected_statuses = st.multiselect(
             "Filter by Status",
             options=all_statuses,
-            default=[s for s in ["VIGENTE", "POR EJECUTAR", "AUTOCALL"] if s in all_statuses],
+            default=[s for s in ["VIGENTE", "POR EJECUTAR"] if s in all_statuses],
         )
     with col_f2:
         selected_vehicle = st.multiselect(
@@ -85,7 +85,8 @@ def render():
     if selected_vehicle:
         filtered = filtered[filtered["vehiculo"].isin(selected_vehicle)]
 
-    active = filtered[filtered["status"].isin(["VIGENTE", "POR EJECUTAR", "AUTOCALL"])]
+    # Active = only still-running products (AUTOCALL/VENCIDO are past events)
+    active = filtered[filtered["status"].isin(["VIGENTE", "POR EJECUTAR"])]
 
     # ── KPI row ────────────────────────────────────────────────────────────────
     st.markdown("---")
@@ -94,7 +95,7 @@ def render():
     k1.metric("Total AUM", fmt_usd(total_aum))
     k2.metric("Active Products", len(active))
     k3.metric("Pending Execution", len(active[active["status"] == "POR EJECUTAR"]))
-    k4.metric("Pending Autocall", len(active[active["status"] == "AUTOCALL"]))
+    k4.metric("Already Autocalled", len(filtered[filtered["status"] == "AUTOCALL"]))
     k5.metric("Maturing ≤30d", len(
         active[pd.to_datetime(active["fecha_vencimiento"], dayfirst=True, errors="coerce") <=
                pd.Timestamp.now() + pd.Timedelta(days=30)]
