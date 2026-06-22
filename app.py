@@ -9,52 +9,119 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
-# Initialize DB and seed data on first run
+
 @st.cache_resource
 def startup():
     init_db()
     seed_from_csv()
     return True
 
+
 startup()
 
-# Apply company colors from config
-primary = cfg.get("primary_color") or "#003087"
-secondary = cfg.get("secondary_color") or "#E31837"
+primary = cfg.get("primary_color") or "#2563EB"
+secondary = cfg.get("secondary_color") or "#DC2626"
+accent1 = cfg.get("accent_color_1") or "#F59E0B"
 
 st.markdown(f"""
 <style>
-    .stTabs [data-baseweb="tab-list"] {{ gap: 8px; }}
+    /* ── Tabs ─────────────────────────────────── */
+    .stTabs [data-baseweb="tab-list"] {{
+        gap: 6px;
+        border-bottom: 2px solid #2d2d4e;
+    }}
     .stTabs [data-baseweb="tab"] {{
-        height: 44px;
-        padding: 0 20px;
+        height: 42px;
+        padding: 0 18px;
         border-radius: 6px 6px 0 0;
         font-weight: 600;
-        font-size: 14px;
+        font-size: 13px;
+        color: #a0aec0;
+        background: #1c1c2e;
+        border: 1px solid #2d2d4e;
     }}
     .stTabs [aria-selected="true"] {{
-        background-color: {primary};
-        color: white;
+        background: {primary} !important;
+        color: white !important;
+        border-color: {primary} !important;
     }}
-    .metric-card {{
-        background: #f8f9fa;
+
+    /* ── KPI metric cards ─────────────────────── */
+    [data-testid="stMetric"] {{
+        background: #1c1c2e;
         border-left: 4px solid {primary};
-        padding: 16px;
-        border-radius: 6px;
-        margin-bottom: 8px;
+        border-radius: 8px;
+        padding: 14px 18px;
     }}
-    h1 {{ color: {primary}; }}
-    h2 {{ color: {primary}; }}
+    [data-testid="stMetricValue"] {{
+        font-size: 1.5rem;
+        font-weight: 700;
+        color: #f0f2f6;
+    }}
+    [data-testid="stMetricLabel"] {{
+        color: #a0aec0;
+        font-size: 0.78rem;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+    }}
+
+    /* ── Buttons ──────────────────────────────── */
+    .stButton>button[kind="primary"] {{
+        background: {primary};
+        border: none;
+        color: white;
+        font-weight: 600;
+        border-radius: 6px;
+    }}
+    .stButton>button[kind="primary"]:hover {{
+        background: {secondary};
+    }}
+
+    /* ── DataFrames ───────────────────────────── */
+    [data-testid="stDataFrame"] {{
+        border: 1px solid #2d2d4e;
+        border-radius: 6px;
+    }}
+
+    /* ── Section headings ─────────────────────── */
+    h1, h2, h3 {{ color: #f0f2f6; }}
+
+    /* ── Dividers ─────────────────────────────── */
+    hr {{ border-color: #2d2d4e; }}
+
+    /* ── Sidebar ──────────────────────────────── */
+    [data-testid="stSidebar"] {{ background: #12121f; }}
+
+    /* ── Header accent bar ────────────────────── */
+    .app-header {{
+        background: linear-gradient(135deg, {primary} 0%, #12121f 60%);
+        padding: 16px 24px 12px;
+        border-radius: 10px;
+        margin-bottom: 12px;
+        border-left: 5px solid {accent1};
+    }}
+    .app-header h2 {{
+        margin: 0;
+        font-size: 1.35rem;
+        font-weight: 700;
+        color: white !important;
+    }}
+    .app-header p {{
+        margin: 2px 0 0;
+        font-size: 0.8rem;
+        color: #a0aec0;
+    }}
 </style>
 """, unsafe_allow_html=True)
 
 # Header
-company_name = cfg.get("company_name") or "Structured Products Manager"
-col_logo, col_title = st.columns([1, 6])
-with col_title:
-    st.markdown(f"## 📊 {company_name} — Structured Products Manager")
-
-st.divider()
+company_name = cfg.get("company_name") or "My Company"
+st.markdown(f"""
+<div class="app-header">
+    <h2>📊 {company_name} — Structured Products Manager</h2>
+    <p>Investment Products Data Manager &nbsp;|&nbsp; Portfolio · Events · Factsheets · Reports</p>
+</div>
+""", unsafe_allow_html=True)
 
 # Navigation tabs
 tabs = st.tabs([

@@ -1,14 +1,29 @@
 import streamlit as st
 import pandas as pd
-import plotly.express as px
+import plotly.graph_objects as go
 from datetime import date, timedelta
 from backend.database import get_all_products
 import backend.config as cfg
 
+_CARD_BG = "#1c1c2e"
+_GRID = "#2d2d4e"
+_TEXT = "#f0f2f6"
+_SUB = "#a0aec0"
+
+
+def fmt_usd(val):
+    if pd.isna(val) or val == 0:
+        return "$0"
+    if abs(val) >= 1_000_000:
+        return f"${val/1_000_000:.1f}M"
+    return f"${val:,.0f}"
+
 
 def render():
-    primary = cfg.get("primary_color") or "#003087"
-    secondary = cfg.get("secondary_color") or "#E31837"
+    palette = cfg.color_sequence()
+    primary = palette[0]
+    secondary = palette[1]
+    accent = palette[2]
 
     st.subheader("Upcoming Maturities & Autocalls")
 
@@ -18,16 +33,11 @@ def render():
         return
 
     active = df[df["status"].isin(["VIGENTE", "POR EJECUTAR", "AUTOCALL"])].copy()
-
     today = pd.Timestamp.now().normalize()
 
-    def parse_date(col):
-        return pd.to_datetime(active[col], dayfirst=True, errors="coerce")
+    active["_fecha_vcto"] = pd.to_datetime(active["fecha_vencimiento"], dayfirst=True, errors="coerce")
 
-    active["_fecha_vcto"] = parse_date("fecha_vencimiento")
-    active["_proximo_ac"] = parse_date("proximo_autocall")
-
-    # Horizon filter
+    # Horizon & type filters
     col1, col2 = st.columns([2, 2])
     with col1:
         horizon = st.selectbox(
@@ -41,14 +51,14 @@ def render():
 
     cutoff = today + timedelta(days=horizon)
 
-    # --- MATURITIES ---
+    # ── Maturities ─────────────────────────────────────────────────────────────
     maturities = active[
         (active["_fecha_vcto"] >= today) & (active["_fecha_vcto"] <= cutoff)
     ].copy()
     maturities["days_to_maturity"] = (maturities["_fecha_vcto"] - today).dt.days
     maturities = maturities.sort_values("days_to_maturity")
 
-    # --- AUTOCALLS ---
+    # ── Autocalls ──────────────────────────────────────────────────────────────
     ac_cols = [f"fecha_autocall_{i}" for i in range(1, 11)]
     ac_rows = []
     for _, row in active.iterrows():
@@ -67,27 +77,27 @@ def render():
                     "days_to_autocall": (dt - today).days,
                     "contraparte": row.get("contraparte"),
                 })
-                break  # only show next upcoming autocall per product
+                break
 
     autocalls = pd.DataFrame(ac_rows).sort_values("days_to_autocall") if ac_rows else pd.DataFrame()
 
-    # KPIs
+    # ── KPI row ────────────────────────────────────────────────────────────────
     k1, k2, k3, k4 = st.columns(4)
-    k1.metric("Maturities in horizon", len(maturities))
-    k2.metric("Autocall obs. in horizon", len(autocalls))
     aum_vcto = maturities["monto_total"].sum() if not maturities.empty else 0
     aum_ac = autocalls["monto_total"].sum() if not autocalls.empty else 0
-    k3.metric("AUM at maturity", f"${aum_vcto/1e6:.1f}M" if aum_vcto >= 1e6 else f"${aum_vcto:,.0f}")
-    k4.metric("AUM at autocall obs.", f"${aum_ac/1e6:.1f}M" if aum_ac >= 1e6 else f"${aum_ac:,.0f}")
+    k1.metric("Maturities in horizon", len(maturities))
+    k2.metric("AUM at maturity", fmt_usd(aum_vcto))
+    k3.metric("Autocall obs. in horizon", len(autocalls))
+    k4.metric("AUM at autocall obs.", fmt_usd(aum_ac))
 
     st.markdown("---")
 
-    # Timeline chart
+    # ── Monthly AUM bar chart ──────────────────────────────────────────────────
     timeline_rows = []
     if event_type in ("Both", "Maturities") and not maturities.empty:
         for _, r in maturities.iterrows():
             timeline_rows.append({
-                "Product": r["nombre_producto"][:35],
+                "Product": r["nombre_producto"][:30],
                 "Date": r["_fecha_vcto"],
                 "Type": "Maturity",
                 "AUM": r["monto_total"],
@@ -95,7 +105,7 @@ def render():
     if event_type in ("Both", "Autocalls") and not autocalls.empty:
         for _, r in autocalls.iterrows():
             timeline_rows.append({
-                "Product": r["nombre_producto"][:35],
+                "Product": r["nombre_producto"][:30],
                 "Date": r["autocall_date"],
                 "Type": "Autocall Obs.",
                 "AUM": r["monto_total"],
@@ -106,16 +116,75 @@ def render():
         tl_df["Month"] = tl_df["Date"].dt.to_period("M").astype(str)
         monthly = tl_df.groupby(["Month", "Type"])["AUM"].sum().reset_index()
 
-        fig = px.bar(
-            monthly, x="Month", y="AUM", color="Type",
-            color_discrete_map={"Maturity": primary, "Autocall Obs.": secondary},
+        months = sorted(monthly["Month"].unique())
+        fig = go.Figure()
+
+        for etype, color in [("Maturity", primary), ("Autocall Obs.", secondary)]:
+            sub = monthly[monthly["Type"] == etype]
+            if not sub.empty:
+                aum_by_month = sub.set_index("Month")["AUM"].reindex(months, fill_value=0)
+                fig.add_trace(go.Bar(
+                    name=etype,
+                    x=months,
+                    y=aum_by_month.values,
+                    marker=dict(color=color, line=dict(color=_CARD_BG, width=1)),
+                    hovertemplate="<b>%{x}</b><br>AUM: $%{y:,.0f}<extra></extra>",
+                ))
+
+        fig.update_layout(
+            template="plotly_dark",
+            paper_bgcolor=_CARD_BG,
+            plot_bgcolor=_CARD_BG,
+            font=dict(color=_TEXT, family="Inter, sans-serif", size=12),
             barmode="group",
-            title="AUM by Event and Month",
+            bargap=0.25,
+            height=300,
+            margin=dict(t=30, b=10, l=10, r=10),
+            legend=dict(bgcolor="rgba(0,0,0,0)", font=dict(color=_SUB, size=11), orientation="h", y=1.05),
+            xaxis=dict(gridcolor=_GRID, zeroline=False),
+            yaxis=dict(gridcolor=_GRID, zeroline=False, tickprefix="$"),
+            title=dict(text="AUM Outflows by Month", font=dict(size=13, color=_TEXT), x=0),
         )
-        fig.update_layout(height=300, margin=dict(t=30, b=0), xaxis_title="", yaxis_title="AUM (USD)")
         st.plotly_chart(fig, use_container_width=True)
 
-    # Tables
+    # ── Days-to-event waterfall strip ─────────────────────────────────────────
+    if timeline_rows:
+        tl_df_sorted = pd.DataFrame(timeline_rows).sort_values("Date")
+        fig2 = go.Figure()
+        color_map = {"Maturity": primary, "Autocall Obs.": secondary}
+        for etype in tl_df_sorted["Type"].unique():
+            sub = tl_df_sorted[tl_df_sorted["Type"] == etype]
+            fig2.add_trace(go.Scatter(
+                x=sub["Date"],
+                y=sub["AUM"],
+                mode="markers+text",
+                name=etype,
+                marker=dict(
+                    size=sub["AUM"].apply(lambda v: max(8, min(30, v / 100_000))),
+                    color=color_map.get(etype, accent),
+                    line=dict(color=_CARD_BG, width=1),
+                    opacity=0.85,
+                ),
+                text=sub["Product"].apply(lambda s: s[:18]),
+                textposition="top center",
+                textfont=dict(size=8, color=_SUB),
+                hovertemplate="<b>%{text}</b><br>Date: %{x|%d %b %Y}<br>AUM: $%{y:,.0f}<extra></extra>",
+            ))
+        fig2.update_layout(
+            template="plotly_dark",
+            paper_bgcolor=_CARD_BG,
+            plot_bgcolor=_CARD_BG,
+            font=dict(color=_TEXT, family="Inter, sans-serif", size=11),
+            height=260,
+            margin=dict(t=30, b=10, l=10, r=10),
+            legend=dict(bgcolor="rgba(0,0,0,0)", font=dict(color=_SUB, size=11), orientation="h", y=1.05),
+            xaxis=dict(gridcolor=_GRID, zeroline=False, title=""),
+            yaxis=dict(gridcolor=_GRID, zeroline=False, tickprefix="$", title="AUM"),
+            title=dict(text="Product Timeline (bubble size = AUM)", font=dict(size=13, color=_TEXT), x=0),
+        )
+        st.plotly_chart(fig2, use_container_width=True)
+
+    # ── Tables ─────────────────────────────────────────────────────────────────
     if event_type in ("Both", "Maturities") and not maturities.empty:
         st.markdown(f"### Maturities ({len(maturities)})")
         vcto_display = maturities[[
@@ -131,11 +200,13 @@ def render():
             "days_to_maturity": "Days Left",
             "underlying_1": "U1",
             "underlying_2": "U2",
-            "rendimiento_total": "Total Return",
+            "rendimiento_total": "Return",
             "contraparte": "Counterparty",
-        })
-        vcto_display["AUM (USD)"] = vcto_display["AUM (USD)"].apply(lambda x: f"${x:,.0f}" if pd.notna(x) else "")
-        vcto_display["Total Return"] = vcto_display["Total Return"].apply(
+        }).copy()
+        vcto_display["AUM (USD)"] = vcto_display["AUM (USD)"].apply(
+            lambda x: f"${x:,.0f}" if pd.notna(x) else ""
+        )
+        vcto_display["Return"] = vcto_display["Return"].apply(
             lambda x: f"{x*100:.2f}%" if pd.notna(x) and x != 0 else ""
         )
         st.dataframe(vcto_display, use_container_width=True, hide_index=True)
@@ -157,8 +228,10 @@ def render():
             "underlying_2": "U2",
             "trigger_autocall": "Trigger",
             "contraparte": "Counterparty",
-        })
-        ac_display["AUM (USD)"] = ac_display["AUM (USD)"].apply(lambda x: f"${x:,.0f}" if pd.notna(x) else "")
+        }).copy()
+        ac_display["AUM (USD)"] = ac_display["AUM (USD)"].apply(
+            lambda x: f"${x:,.0f}" if pd.notna(x) else ""
+        )
         ac_display["Trigger"] = ac_display["Trigger"].apply(
             lambda x: f"{x*100:.0f}%" if pd.notna(x) and x != 0 else ""
         )
