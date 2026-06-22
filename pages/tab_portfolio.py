@@ -103,140 +103,132 @@ def render():
 
     st.markdown("---")
 
-    # ── Row 1: Donut by Status | Bar by Entity ─────────────────────────────────
+    def _donut(labels, values, title):
+        total = sum(values)
+        fig = go.Figure(go.Pie(
+            labels=labels, values=values,
+            hole=0.60,
+            marker=dict(
+                colors=(palette * 4)[:len(labels)],
+                line=dict(color=_CARD_BG, width=3),
+            ),
+            textinfo="label+percent",
+            textfont=dict(size=11, color=_TEXT),
+            hovertemplate="<b>%{label}</b><br>$%{value:,.0f}<br>%{percent}<extra></extra>",
+            direction="clockwise", sort=True,
+        ))
+        fig.update_layout(
+            **_dark_layout(height=340),
+            title=dict(text=title, font=dict(size=13, color=_TEXT), x=0, pad=dict(l=0)),
+            annotations=[dict(
+                text=fmt_usd(total),
+                x=0.5, y=0.5,
+                font=dict(size=18, color=_TEXT, family="Inter, sans-serif"),
+                showarrow=False,
+            )],
+            margin=dict(t=36, b=10, l=10, r=10),
+        )
+        return fig
+
+    def _bar_h(y_vals, x_vals, title):
+        colors = (palette * 4)[:len(y_vals)]
+        fig = go.Figure(go.Bar(
+            x=x_vals, y=y_vals,
+            orientation="h",
+            marker=dict(color=colors, line=dict(color=_CARD_BG, width=1)),
+            text=[fmt_usd(v) for v in x_vals],
+            textposition="outside",
+            textfont=dict(color=_TEXT, size=11),
+            hovertemplate="<b>%{y}</b><br>$%{x:,.0f}<extra></extra>",
+        ))
+        fig.update_layout(
+            **_dark_layout(height=max(300, len(y_vals) * 44 + 60)),
+            title=dict(text=title, font=dict(size=13, color=_TEXT), x=0, pad=dict(l=0)),
+            xaxis=dict(showgrid=False, showticklabels=False, zeroline=False),
+            yaxis=dict(gridcolor=_GRID, zeroline=False, autorange="reversed",
+                       tickfont=dict(size=12)),
+            bargap=0.28,
+            margin=dict(t=36, b=10, l=10, r=80),
+        )
+        return fig
+
+    # ── Row 1: Status donut | Country donut ───────────────────────────────────
     c1, c2 = st.columns(2)
 
     with c1:
-        st.markdown("**AUM by Status**")
         status_df = (
-            filtered.groupby("status")["monto_total"]
-            .sum()
-            .reset_index()
-            .rename(columns={"status": "Status", "monto_total": "AUM"})
+            filtered.groupby("status")["monto_total"].sum().reset_index()
         )
-        status_df = status_df[status_df["AUM"] > 0]
+        status_df["monto_total"] = pd.to_numeric(status_df["monto_total"], errors="coerce").fillna(0)
+        status_df = status_df[status_df["monto_total"] > 0]
         if not status_df.empty:
-            fig = go.Figure(go.Pie(
-                labels=status_df["Status"],
-                values=status_df["AUM"],
-                hole=0.55,
-                marker=dict(colors=palette, line=dict(color=_CARD_BG, width=2)),
-                textinfo="label+percent",
-                textfont=dict(size=11, color=_TEXT),
-                hovertemplate="<b>%{label}</b><br>AUM: $%{value:,.0f}<br>%{percent}<extra></extra>",
-            ))
-            fig.update_layout(
-                **_dark_layout(height=280),
-                annotations=[dict(
-                    text=fmt_usd(status_df["AUM"].sum()),
-                    x=0.5, y=0.5, font=dict(size=16, color=_TEXT, family="Inter"),
-                    showarrow=False,
-                )],
+            st.plotly_chart(
+                _donut(status_df["status"].tolist(), status_df["monto_total"].tolist(),
+                       "AUM por Status"),
+                use_container_width=True,
             )
-            st.plotly_chart(fig, use_container_width=True)
 
     with c2:
-        st.markdown("**AUM by Vehicle**")
-        veh_df = (
-            active.groupby("vehiculo")["monto_total"]
-            .sum()
-            .reset_index()
-            .rename(columns={"vehiculo": "Vehicle", "monto_total": "AUM"})
-        )
-        veh_df = veh_df[veh_df["AUM"] > 0].sort_values("AUM")
-        if not veh_df.empty:
-            fig = go.Figure(go.Bar(
-                x=veh_df["AUM"],
-                y=veh_df["Vehicle"],
-                orientation="h",
-                marker=dict(
-                    color=primary,
-                    opacity=0.85,
-                    line=dict(color=_CARD_BG, width=1),
-                ),
-                text=veh_df["AUM"].apply(fmt_usd),
-                textposition="outside",
-                textfont=dict(color=_TEXT, size=10),
-                hovertemplate="<b>%{y}</b><br>AUM: $%{x:,.0f}<extra></extra>",
-            ))
-            fig.update_layout(
-                **_dark_layout(height=280),
-                xaxis=dict(showgrid=False, showticklabels=False, zeroline=False),
-                yaxis=dict(gridcolor=_GRID, zeroline=False),
-                bargap=0.3,
+        country_data = {
+            "Peru":     pd.to_numeric(active.get("monto_peru",     pd.Series(dtype=float)), errors="coerce").sum(),
+            "Chile":    pd.to_numeric(active.get("monto_chile",    pd.Series(dtype=float)), errors="coerce").sum(),
+            "Colombia": pd.to_numeric(active.get("monto_colombia", pd.Series(dtype=float)), errors="coerce").sum(),
+            "USA":      pd.to_numeric(active.get("monto_usa",      pd.Series(dtype=float)), errors="coerce").sum(),
+        }
+        country_df = pd.DataFrame(
+            [(k, v) for k, v in country_data.items() if v > 0],
+            columns=["Country", "AUM"],
+        ).sort_values("AUM", ascending=False)
+        if not country_df.empty:
+            st.plotly_chart(
+                _donut(country_df["Country"].tolist(), country_df["AUM"].tolist(),
+                       "AUM por País"),
+                use_container_width=True,
             )
-            st.plotly_chart(fig, use_container_width=True)
 
-    # ── Row 2: Donut by Segment | Donut by Asset Class ─────────────────────────
+    # ── Row 2: Vehicle bar | Segment bar ──────────────────────────────────────
     c3, c4 = st.columns(2)
 
     with c3:
-        st.markdown("**AUM by Segment**")
+        veh_df = (
+            active.groupby("vehiculo")["monto_total"].sum().reset_index()
+        )
+        veh_df["monto_total"] = pd.to_numeric(veh_df["monto_total"], errors="coerce").fillna(0)
+        veh_df = veh_df[veh_df["monto_total"] > 0].sort_values("monto_total")
+        if not veh_df.empty:
+            st.plotly_chart(
+                _bar_h(veh_df["vehiculo"].tolist(), veh_df["monto_total"].tolist(),
+                       "AUM por Vehículo"),
+                use_container_width=True,
+            )
+
+    with c4:
         segment_cols = {
             "BP Peru": "monto_bp_peru", "BP Chile": "monto_bp_chile",
             "BP Colombia": "monto_bp_colombia", "BP US": "monto_bp_us",
             "RIA": "monto_ria", "W9": "monto_w9",
             "Enalta": "monto_enalta", "BEX": "monto_bex",
-            "Consumer": "monto_consumo", "Legal Entities": "monto_juridicos",
+            "Consumo": "monto_consumo", "Jurídicos": "monto_juridicos",
             "MFO": "monto_mfo", "TYBA": "monto_tyba",
         }
-        seg_data = {k: active[v].sum() for k, v in segment_cols.items() if v in active.columns}
-        seg_df = pd.DataFrame(list(seg_data.items()), columns=["Segment", "AUM"])
-        seg_df = seg_df[seg_df["AUM"] > 0].sort_values("AUM", ascending=False)
-        if not seg_df.empty:
-            fig = go.Figure(go.Pie(
-                labels=seg_df["Segment"],
-                values=seg_df["AUM"],
-                hole=0.55,
-                marker=dict(colors=palette * 3, line=dict(color=_CARD_BG, width=2)),
-                textinfo="label+percent",
-                textfont=dict(size=10, color=_TEXT),
-                hovertemplate="<b>%{label}</b><br>AUM: $%{value:,.0f}<br>%{percent}<extra></extra>",
-            ))
-            fig.update_layout(
-                **_dark_layout(height=280),
-                annotations=[dict(
-                    text=fmt_usd(seg_df["AUM"].sum()),
-                    x=0.5, y=0.5, font=dict(size=15, color=_TEXT),
-                    showarrow=False,
-                )],
-            )
-            st.plotly_chart(fig, use_container_width=True)
-
-    with c4:
-        st.markdown("**AUM by Country**")
-        country_data = {
-            "Peru": active["monto_peru"].sum(),
-            "Chile": active["monto_chile"].sum(),
-            "Colombia": active["monto_colombia"].sum(),
-            "USA": active["monto_usa"].sum(),
+        seg_data = {
+            k: pd.to_numeric(active[v], errors="coerce").sum()
+            for k, v in segment_cols.items() if v in active.columns
         }
-        country_df = pd.DataFrame(list(country_data.items()), columns=["Country", "AUM"])
-        country_df = country_df[country_df["AUM"] > 0].sort_values("AUM", ascending=False)
-        if not country_df.empty:
-            fig = go.Figure(go.Pie(
-                labels=country_df["Country"],
-                values=country_df["AUM"],
-                hole=0.55,
-                marker=dict(colors=palette, line=dict(color=_CARD_BG, width=2)),
-                textinfo="label+percent",
-                textfont=dict(size=11, color=_TEXT),
-                hovertemplate="<b>%{label}</b><br>AUM: $%{value:,.0f}<br>%{percent}<extra></extra>",
-            ))
-            fig.update_layout(
-                **_dark_layout(height=280),
-                annotations=[dict(
-                    text=fmt_usd(country_df["AUM"].sum()),
-                    x=0.5, y=0.5, font=dict(size=15, color=_TEXT),
-                    showarrow=False,
-                )],
+        seg_df = pd.DataFrame(
+            [(k, v) for k, v in seg_data.items() if v > 0],
+            columns=["Segment", "AUM"],
+        ).sort_values("AUM")
+        if not seg_df.empty:
+            st.plotly_chart(
+                _bar_h(seg_df["Segment"].tolist(), seg_df["AUM"].tolist(),
+                       "AUM por Segmento"),
+                use_container_width=True,
             )
-            st.plotly_chart(fig, use_container_width=True)
 
     # ── AUM Historical Evolution ────────────────────────────────────────────────
     history = get_aum_history()
     if not history.empty and len(history) > 1:
-        st.markdown("**AUM Historical Evolution**")
         fig = go.Figure()
         fig.add_trace(go.Scatter(
             x=history["fecha"],
@@ -244,15 +236,19 @@ def render():
             mode="lines+markers",
             name="Total AUM",
             line=dict(color=primary, width=2.5),
-            marker=dict(size=5, color=primary),
+            marker=dict(size=6, color=primary, line=dict(color=_CARD_BG, width=2)),
             fill="tozeroy",
-            fillcolor=_rgba(primary, 0.15),
-            hovertemplate="%{x}<br><b>AUM: $%{y:,.0f}</b><extra></extra>",
+            fillcolor=_rgba(primary, 0.12),
+            hovertemplate="%{x|%d %b %Y}<br><b>$%{y:,.0f}</b><extra></extra>",
         ))
         fig.update_layout(
-            **_dark_layout(height=220),
-            xaxis=dict(gridcolor=_GRID, zeroline=False, showline=False),
-            yaxis=dict(gridcolor=_GRID, zeroline=False, showline=False, tickprefix="$"),
+            **_dark_layout(height=240),
+            title=dict(text="Evolución AUM", font=dict(size=13, color=_TEXT), x=0),
+            xaxis=dict(gridcolor=_GRID, zeroline=False, showline=False,
+                       tickfont=dict(size=11)),
+            yaxis=dict(gridcolor=_GRID, zeroline=False, showline=False,
+                       tickprefix="$", tickfont=dict(size=11)),
+            margin=dict(t=36, b=10, l=10, r=10),
         )
         st.plotly_chart(fig, use_container_width=True)
 
