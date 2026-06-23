@@ -45,10 +45,11 @@ def render():
 
     # ── Step 1: Upload & Extract ──────────────────────────────────────────────
     st.markdown("### Step 1 — Upload Termsheet PDF")
-    api_key = cfg.get("claude_api_key") or ""
+    import os
+    api_key = cfg.get("claude_api_key") or os.environ.get("ANTHROPIC_API_KEY") or ""
 
     if not api_key:
-        st.warning("Claude API key not set — go to ⚙️ Settings to add it.")
+        st.warning("Claude API key not set — add it in Settings or create a .env file with ANTHROPIC_API_KEY=sk-ant-...")
 
     uploaded = st.file_uploader("Drop termsheet PDF here", type=["pdf"])
 

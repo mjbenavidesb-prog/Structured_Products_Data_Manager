@@ -1,10 +1,13 @@
 import streamlit as st
 import pandas as pd
 from datetime import date, timedelta
+from pathlib import Path
 from backend.database import get_all_products
 from backend.factsheet import generate_factsheet_pdf
 from backend.market_data import resolve_ticker
 import backend.config as cfg
+
+_TEMPLATES_DIR = Path("data/templates")
 
 try:
     import yfinance as yf
@@ -28,11 +31,20 @@ def _badge(status: str) -> str:
     )
 
 
+_ES_MON = {"Ene":"Jan","Feb":"Feb","Mar":"Mar","Abr":"Apr","May":"May",
+           "Jun":"Jun","Jul":"Jul","Ago":"Aug","Set":"Sep","Sep":"Sep",
+           "Oct":"Oct","Nov":"Nov","Dic":"Dec"}
+
 def _parse_date(val) -> date | None:
     if val is None:
         return None
+    s = str(val).strip()
+    if s in ("", "nan", "None", "NaT"):
+        return None
+    for es, en in _ES_MON.items():
+        s = s.replace(es, en)
     try:
-        d = pd.to_datetime(str(val), dayfirst=True, errors="coerce")
+        d = pd.to_datetime(s, dayfirst=True, errors="coerce")
         return d.date() if pd.notna(d) else None
     except Exception:
         return None
@@ -67,6 +79,13 @@ def _validate(ftype: str, p: dict) -> tuple[bool, str]:
     """
     today = date.today()
 
+    # All factsheet types require at least one underlying and a start date
+    if not _has_termsheet(p):
+        return False, (
+            "El producto no tiene datos de termsheet (subyacentes y fecha de inicio). "
+            "Carga el termsheet primero desde el tab **Load Product**."
+        )
+
     if ftype == "Autocall":
         past_obs = [
             d for i in range(1, 11)
@@ -99,25 +118,25 @@ def _validate(ftype: str, p: dict) -> tuple[bool, str]:
         return True, ""
 
     if ftype == "Vencimiento":
-        obs_final = _parse_date(p.get("fecha_obs_final"))
-        vcto      = _parse_date(p.get("fecha_vencimiento"))
-        if obs_final and obs_final <= today:
-            return True, ""
-        if vcto and vcto <= today:
-            return True, ""
-        ref     = obs_final or vcto
-        ref_str = ref.strftime("%d/%m/%Y") if ref else "desconocida"
-        return False, (
-            f"La fecha de observación final / vencimiento ({ref_str}) aún no ha llegado. "
-            "Solo se puede generar el factsheet Vencimiento cuando el producto ya venció."
+        obs_final = _parse_date(
+            p.get("fecha_obs_final") or p.get("fecha_obs_final_ac")
         )
+        vcto = _parse_date(p.get("fecha_vencimiento"))
+        ref  = obs_final or vcto
+        if not ref:
+            return False, (
+                "No hay fecha de observación final ni de vencimiento registrada para este "
+                "producto. Completa el campo **Fecha de Obs. Final** o **Fecha de "
+                "Vencimiento** en el portafolio antes de generar el factsheet."
+            )
+        if ref > today:
+            return False, (
+                f"La fecha de vencimiento ({ref.strftime('%d/%m/%Y')}) aún no ha llegado. "
+                "Solo se puede generar el factsheet Vencimiento cuando el producto ya venció."
+            )
+        return True, ""
 
     if ftype == "Ejecutado":
-        if not _has_termsheet(p):
-            return False, (
-                "El producto no tiene datos de termsheet (subyacentes ni fecha de inicio). "
-                "Carga primero el termsheet desde el tab **Load Product**."
-            )
         return True, ""
 
     return False, "Tipo de factsheet desconocido."
@@ -127,11 +146,15 @@ def _validate(ftype: str, p: dict) -> tuple[bool, str]:
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def _verify_autocall_prices(
-    tickers: tuple, strikes: tuple, trigger: float, obs_dates: tuple
+    tickers: tuple, start_date_str: str, trigger: float, obs_dates: tuple
 ) -> tuple[bool, str | None, str]:
     """
-    Fetches close prices from yfinance on each past observation date and checks
-    whether the worst-of underlying closed >= strike * trigger on any date.
+    Downloads prices from the product start date through the last observation date,
+    normalizes them (100 = inception price), then checks on each observation date
+    whether the worst-of normalized return >= trigger level.
+
+    This approach is independent of how strikes are stored in the DB, because it
+    derives the performance relative to the actual inception price from yfinance.
 
     Returns:
         (did_autocall: bool, autocall_date_str: str | None, message: str)
@@ -143,57 +166,68 @@ def _verify_autocall_prices(
     if not yf_syms:
         return True, None, "No yfinance tickers resolved — skipping price check."
 
-    trigger_dec = trigger if trigger <= 1.5 else trigger / 100
+    trigger_level = (trigger if trigger <= 1.5 else trigger / 100) * 100  # as percentage (e.g. 100.0)
 
-    for obs_date in sorted(obs_dates):
-        # Fetch a 5-day window around the observation date to handle holidays
-        start = str(obs_date - timedelta(days=4))
-        end   = str(obs_date + timedelta(days=1))
-        try:
-            if len(yf_syms) == 1:
-                raw = yf.download(yf_syms[0], start=start, end=end,
-                                  auto_adjust=True, progress=False)
-                closes = raw[["Close"]]
-                closes.columns = yf_syms
-            else:
-                raw = yf.download(yf_syms, start=start, end=end,
-                                  auto_adjust=True, progress=False)
-                closes = raw["Close"] if isinstance(raw.columns, pd.MultiIndex) else raw
+    try:
+        start_dt = pd.to_datetime(start_date_str, dayfirst=True, errors="coerce")
+        if pd.isna(start_dt):
+            return True, None, "Invalid start date — skipping price check."
+        start_dt = start_dt.date()
 
-            if closes.empty:
+        fetch_start = str(start_dt - timedelta(days=7))
+        fetch_end   = str(max(obs_dates) + timedelta(days=2))
+
+        # auto_adjust=False: raw unadjusted prices — autocall triggers are based on
+        # price performance only, not total return (dividends go to the issuer).
+        raw = yf.download(yf_syms, start=fetch_start, end=fetch_end,
+                          auto_adjust=False, progress=False)
+
+        if raw.empty:
+            return True, None, "No price data returned — skipping check."
+
+        # Extract Close prices; handle both MultiIndex (multi-ticker) and flat (single)
+        if isinstance(raw.columns, pd.MultiIndex):
+            closes = raw["Close"].copy()
+        else:
+            closes = raw[["Close"]].copy()
+            closes.columns = yf_syms
+
+        closes.index = pd.to_datetime(closes.index).tz_localize(None)
+        # Keep only the tickers we care about (column order may vary)
+        present = [s for s in yf_syms if s in closes.columns]
+        closes = closes[present]
+
+        # Initial prices: last close on or before start_dt (handles weekends/holidays)
+        pre = closes[closes.index.date <= start_dt]
+        if pre.empty:
+            pre = closes[closes.index.date <= start_dt + timedelta(days=5)]
+        if pre.empty:
+            return True, None, "No prices near start date — skipping check."
+        initial = pre.iloc[-1]
+
+        # Normalize: 100 = inception price
+        normalized = closes / initial * 100
+
+        for obs_date in sorted(obs_dates):
+            window = normalized[normalized.index.date <= obs_date]
+            if window.empty:
                 continue
-
-            # Use the last available close on or before obs_date
-            closes.index = pd.to_datetime(closes.index).tz_localize(None)
-            closes = closes[closes.index.date <= obs_date]
-            if closes.empty:
+            last_row = window.iloc[-1]
+            # Require all tickers to have data; if any is NaN, skip this date
+            if last_row.isna().any():
                 continue
-
-            row = closes.iloc[-1]
-
-            # Check worst-of: each underlying must be >= strike * trigger
-            autocalled = True
-            for sym, strike in zip(yf_syms, strikes):
-                if sym not in row.index or strike is None or strike == 0:
-                    autocalled = False
-                    break
-                price = float(row[sym])
-                if price < strike * trigger_dec:
-                    autocalled = False
-                    break
-
-            if autocalled:
+            worst = float(last_row.min())
+            if worst >= trigger_level:
                 return True, str(obs_date), ""
 
-        except Exception:
-            continue  # network error on one date → keep checking others
+    except Exception as e:
+        return True, None, f"Price check error ({e}) — proceeding."
 
-    # None of the past observation dates triggered autocall
-    dates_str = ", ".join(str(d) for d in obs_dates)
+    dates_str = ", ".join(str(d) for d in sorted(obs_dates))
     return False, None, (
-        f"El producto **no ha autocalleado**. Se verificaron los precios de cierre "
+        f"El producto **no ha autocalleado**. Se verificaron los rendimientos normalizados "
         f"en las fechas de observación pasadas ({dates_str}) y en ninguna el "
-        f"peor subyacente superó el nivel de autocall ({trigger_dec*100:.0f}% del strike inicial)."
+        f"peor subyacente alcanzó el {trigger_level:.0f}% de su nivel inicial."
     )
 
 
@@ -266,6 +300,17 @@ def render():
     else:
         k5.metric("Total Return", "—")
 
+    # ── Disclaimer ────────────────────────────────────────────────────────────
+    disclaimer = st.text_area(
+        "Disclaimer (opcional)",
+        placeholder=(
+            "Escribe aquí el texto legal o disclaimer que aparecerá en la parte inferior "
+            "del factsheet. Si se deja vacío se mostrará la nota estándar de rentabilidad."
+        ),
+        height=75,
+        key="disclaimer_input",
+    )
+
     # ── Data expander ─────────────────────────────────────────────────────────
     with st.expander("Product data used for factsheet", expanded=False):
         display_fields = [
@@ -289,8 +334,18 @@ def render():
             st.warning("Corrige la selección antes de generar.")
             return
 
-        company_name = cfg.get("company_name") or "My Company"
+        company_name = cfg.get("company_name") or ""
         primary      = cfg.get("primary_color") or "#CC2200"
+        secondary    = cfg.get("secondary_color") or "#DC2626"
+        ac_date_str  = None   # set below for Autocall, stays None for other types
+
+        # Load company logo (PNG/JPG, optional)
+        logo_bytes: bytes | None = None
+        for _ext in ("png", "jpg", "jpeg"):
+            _lp = _TEMPLATES_DIR / f"company_logo.{_ext}"
+            if _lp.exists():
+                logo_bytes = _lp.read_bytes()
+                break
 
         # For Autocall: verify prices on observation dates before generating
         if ftype == "Autocall":
@@ -300,20 +355,19 @@ def render():
                 if product.get(f"underlying_{i}")
                 and str(product.get(f"underlying_{i}")).strip() not in ("", "nan", "None")
             ]
-            strikes_list = [
-                _safe_float(product.get(f"strike_{i}"))
-                for i in range(1, len(unds_list) + 1)
-            ]
             trigger = _safe_float(product.get("trigger_autocall")) or 1.0
             today   = date.today()
             past_obs = tuple(
                 d for i in range(1, 11)
                 if (d := _parse_date(product.get(f"fecha_autocall_{i}"))) and d <= today
             )
+            start_date_str = str(
+                product.get("fecha_inicio") or product.get("fecha_strike") or ""
+            )
 
             with st.spinner("Verificando precios en fechas de observación..."):
                 did_ac, ac_date_str, msg = _verify_autocall_prices(
-                    tuple(unds_list), tuple(strikes_list), trigger, past_obs
+                    tuple(unds_list), start_date_str, trigger, past_obs
                 )
 
             if not did_ac:
@@ -321,7 +375,15 @@ def render():
                 return
 
             if ac_date_str:
-                st.info(f"Autocall verificado en fecha de observación: **{ac_date_str}**")
+                try:
+                    from datetime import datetime as _dt
+                    _d = _dt.strptime(ac_date_str, "%Y-%m-%d")
+                    _MESES = ["Ene","Feb","Mar","Abr","May","Jun",
+                              "Jul","Ago","Set","Oct","Nov","Dic"]
+                    ac_display = f"{_d.day:02d}-{_MESES[_d.month-1]}-{str(_d.year)[2:]}"
+                except Exception:
+                    ac_display = ac_date_str
+                st.info(f"Autocall verificado en fecha de observación: **{ac_display}**")
 
         with st.spinner(f"Generating {ftype} factsheet — fetching market data..."):
             try:
@@ -330,15 +392,19 @@ def render():
                     event_type=ftype,
                     company_name=company_name,
                     primary=primary,
+                    secondary=secondary,
+                    verified_autocall_date=ac_date_str if ftype == "Autocall" else None,
+                    logo_bytes=logo_bytes,
+                    disclaimer=disclaimer.strip() or None,
                 )
                 st.success(f"Factsheet **{ftype}** generado correctamente.")
 
-                file_name = f"Factsheet_{ftype}_{selected[:40].replace(' ', '_')}.pdf"
+                file_name = f"Factsheet_{ftype}_{selected[:40].replace(' ', '_')}.pptx"
                 st.download_button(
-                    label=f"Download PDF — {file_name}",
+                    label=f"Descargar PPTX — {file_name}",
                     data=pdf_bytes,
                     file_name=file_name,
-                    mime="application/pdf",
+                    mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
                     type="primary",
                     use_container_width=True,
                 )

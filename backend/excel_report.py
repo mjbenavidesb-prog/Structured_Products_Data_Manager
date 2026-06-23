@@ -253,11 +253,11 @@ def generate_excel_report(
     fill_white   = PatternFill("solid", fgColor="FFFFFF")
 
     font_title   = Font(name="Calibri", bold=True, color="FFFFFF", size=14)
-    font_info    = Font(name="Calibri", italic=True, color="595959", size=10)
+    font_info    = Font(name="Calibri", italic=True, color="595959", size=11)
     font_section = Font(name="Calibri", bold=True, color="FFFFFF", size=11)
-    font_header  = Font(name="Calibri", bold=True, color="FFFFFF", size=9)
-    font_data    = Font(name="Calibri", size=9)
-    font_total   = Font(name="Calibri", bold=True, size=9)
+    font_header  = Font(name="Calibri", bold=True, color="FFFFFF", size=11)
+    font_data    = Font(name="Calibri", size=11)
+    font_total   = Font(name="Calibri", bold=True, size=11)
 
     align_center = Alignment(horizontal="center", vertical="center", wrap_text=True)
     align_left   = Alignment(horizontal="left",   vertical="center", wrap_text=True)
@@ -372,7 +372,7 @@ def generate_excel_report(
                    end_row=current_row, end_column=n_cols)
     cell = ws.cell(current_row, 1,
                    f"TOTAL PORTAFOLIO: USD {grand_total:,.0f}")
-    cell.font      = Font(name="Calibri", bold=True, color="FFFFFF", size=11)
+    cell.font      = Font(name="Calibri", bold=True, color="FFFFFF", size=14)
     cell.fill      = fill_title
     cell.alignment = align_right
     cell.border    = _thin_border()

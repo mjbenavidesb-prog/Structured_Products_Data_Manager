@@ -32,6 +32,12 @@ env/
 data/*.csv
 data/*.xlsx
 
+# Company branding assets (private)
+data/templates/*.png
+data/templates/*.jpg
+data/templates/*.jpeg
+data/templates/*.pptx
+
 # OS
 .DS_Store
 Thumbs.db

@@ -1,7 +1,7 @@
 from backend.database import get_config, set_config
 
 DEFAULTS = {
-    "company_name": "My Company",
+    "company_name": "",
     "primary_color": "#2563EB",
     "secondary_color": "#DC2626",
     "accent_color_1": "#F59E0B",

@@ -1,6 +1,9 @@
 import streamlit as st
 import backend.config as cfg
-from backend.database import reseed_from_csv
+from backend.database import reseed_from_file, seed_from_file, get_all_products, generate_template_xlsx
+from pathlib import Path
+
+_TEMPLATES_DIR = Path("data/templates")
 
 
 def _swatch(color: str, label: str) -> str:
@@ -23,7 +26,7 @@ def render():
         with col1:
             company_name = st.text_input(
                 "Company Name",
-                value=cfg.get("company_name") or "My Company",
+                value=cfg.get("company_name") or "",
                 help="Shown in the app header and on generated factsheets.",
             )
 
@@ -96,21 +99,115 @@ def render():
                 cfg.save("claude_api_key", new_api_key.strip())
             st.success("Settings saved. Reload the page to apply colors across all charts.")
 
-    # ── Database section ───────────────────────────────────────────────────────
-    st.markdown("---")
-    st.markdown("#### Database")
-    st.caption(
-        "Si actualizaste el CSV o hay valores incorrectos (cupones en 0, barreras mal), "
-        "usa este botón para borrar la base y re-importar desde el CSV."
-    )
-    if st.button("Reseed Database from CSV", type="secondary"):
-        with st.spinner("Borrando base y re-importando..."):
-            result = reseed_from_csv()
-        if result:
-            st.success("Base re-importada correctamente desde el CSV.")
-            st.rerun()
+        # ── Company logo ───────────────────────────────────────────────────────
+        st.markdown("---")
+        st.markdown("#### Logo de la Empresa")
+        st.caption(
+            "Sube el logo de tu empresa en **PNG o JPG**. "
+            "Aparecerá en la barra de cabecera de todos los factsheets generados. "
+            "Recomendado: fondo transparente (PNG) o blanco, formato horizontal."
+        )
+
+        _TEMPLATES_DIR.mkdir(parents=True, exist_ok=True)
+
+        # Find any existing logo
+        _logo_path = None
+        for _ext in ("png", "jpg", "jpeg"):
+            _p = _TEMPLATES_DIR / f"company_logo.{_ext}"
+            if _p.exists():
+                _logo_path = _p
+                break
+
+        if _logo_path:
+            st.image(str(_logo_path), width=220)
+            st.success(f"Logo activo: **{_logo_path.name}** ({_logo_path.stat().st_size // 1024} KB)")
+            if st.button("Eliminar logo", key="del_logo"):
+                _logo_path.unlink()
+                st.rerun()
         else:
-            st.error("No se encontró el archivo CSV en data/. Colócalo ahí primero.")
+            st.caption("Sin logo — se mostrará el nombre de la empresa en texto.")
+
+        uploaded_logo = st.file_uploader(
+            "Subir logo (PNG, JPG)",
+            type=["png", "jpg", "jpeg"],
+            key="logo_upload",
+            label_visibility="collapsed",
+        )
+        if uploaded_logo:
+            ext = uploaded_logo.name.rsplit(".", 1)[-1].lower()
+            # Remove any previous logo files
+            for _ext in ("png", "jpg", "jpeg"):
+                _old = _TEMPLATES_DIR / f"company_logo.{_ext}"
+                if _old.exists():
+                    _old.unlink()
+            logo_save_path = _TEMPLATES_DIR / f"company_logo.{ext}"
+            logo_save_path.write_bytes(uploaded_logo.read())
+            st.success("Logo guardado. Se aplicará en el próximo factsheet generado.")
+            st.rerun()
+
+    # ── Database / Portfolio import ────────────────────────────────────────────
+    st.markdown("---")
+    st.markdown("#### Importar Portafolio")
+
+    n_productos = len(get_all_products())
+    if n_productos:
+        st.info(f"Base de datos activa: **{n_productos} productos** cargados.")
+    else:
+        st.warning("La base de datos está vacía. Sube un archivo para comenzar.")
+
+    st.caption(
+        "Sube tu base de datos en **Excel (.xlsx)** o **CSV (.csv)** para cargar o actualizar "
+        "el portafolio completo. Si tu archivo tiene columnas distintas, descarga primero la "
+        "plantilla y adáptala a tu formato."
+    )
+
+    st.download_button(
+        label="Descargar plantilla Excel",
+        data=generate_template_xlsx(),
+        file_name="plantilla_portafolio.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        help="Excel con todas las columnas esperadas y una fila de ejemplo.",
+    )
+
+    st.markdown("<div style='margin-top:8px'></div>", unsafe_allow_html=True)
+
+    uploaded_portfolio = st.file_uploader(
+        "Subir Excel o CSV del portafolio",
+        type=["xlsx", "xls", "csv"],
+        key="portfolio_upload",
+        label_visibility="collapsed",
+    )
+
+    if uploaded_portfolio:
+        mode = st.radio(
+            "¿Qué hacer con los datos existentes?",
+            ["Reemplazar todo (borrar base y reimportar)", "Agregar a los existentes"],
+            key="import_mode",
+        )
+        if st.button("Importar portafolio", type="primary"):
+            file_bytes = uploaded_portfolio.read()
+            with st.spinner("Importando..."):
+                try:
+                    if "Reemplazar" in mode:
+                        result = reseed_from_file(file_bytes, uploaded_portfolio.name)
+                    else:
+                        result = seed_from_file(file_bytes, uploaded_portfolio.name)
+                    st.success(f"{result} productos importados desde **{uploaded_portfolio.name}**.")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Error al importar: {e}")
+
+    with st.expander("Opciones avanzadas", expanded=False):
+        st.caption("Borra todos los productos de la base de datos sin reimportar.")
+        if st.button("Limpiar base de datos", type="secondary", key="clear_db"):
+            import sqlite3
+            from backend.database import get_connection
+            conn = get_connection()
+            conn.execute("DELETE FROM products")
+            conn.commit()
+            conn.close()
+            st.success("Base de datos limpiada.")
+            st.rerun()
 
     with tab_lists:
         st.markdown("Edit the dropdown options available throughout the app.")
