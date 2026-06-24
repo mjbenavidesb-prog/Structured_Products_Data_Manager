@@ -552,7 +552,7 @@ def _fetch_perf(unds, fecha_inicio, cutoff):
 # ══════════════════════════════════════════════════════════════════════════════
 
 _PART_ELEM_TYPES = {
-    "Dual Directional", "Long Call (ATM)", "Long Call (ITM)",
+    "Long Call (ATM)", "Long Call (ITM)",
     "Capital Protected Participation",
 }
 
@@ -756,6 +756,10 @@ def _build_scenario_tbl(slide, x, y, w, unds: list, barrier_pct: float,
     return total_h
 
 
+def _is_dual_directional(product: dict) -> bool:
+    return str(product.get("elemento_2_tipo") or "").strip() == "KO Put (ATM)"
+
+
 def _narrative_participation(product: dict, elem_tipo: str) -> list[str]:
     """Narrative description paragraph for participation products."""
     asset_class  = str(product.get("asset_class") or "renta variable")
@@ -773,7 +777,7 @@ def _narrative_participation(product: dict, elem_tipo: str) -> list[str]:
 
     fp_str = f"{factor_part:.2f}x" if factor_part else "1.00x"
 
-    if elem_tipo == "Dual Directional":
+    if _is_dual_directional(product):
         return [
             f"El producto brinda exposición a la {asset_class.lower()} a {plazo_str}. "
             f"El inversionista se beneficiará del upside del subyacente multiplicado por "
@@ -798,10 +802,10 @@ def _narrative_participation(product: dict, elem_tipo: str) -> list[str]:
     ]
 
 
-def _scenario_bullets(elem_tipo: str, buffer_pct: float) -> list[str]:
+def _scenario_bullets(product: dict, buffer_pct: float) -> list[str]:
     """Bullet scenario descriptions for the right column."""
     b_str = f"{buffer_pct:.2f}%"
-    if elem_tipo == "Dual Directional":
+    if _is_dual_directional(product):
         return [
             "A vencimiento:",
             f"▪  Escenario 1: Si el subyacente tiene un rendimiento positivo, el "
@@ -921,7 +925,7 @@ def generate_factsheet_participation(
 
     # ── Narrative & bullets ────────────────────────────────────────────────
     narrative = _narrative_participation(product, elem_tipo)
-    bullets   = _scenario_bullets(elem_tipo, buffer_pct)
+    bullets   = _scenario_bullets(product, buffer_pct)
 
     # ── Charts ────────────────────────────────────────────────────────────
     payoff_buf = _chart_payoff_dd(buffer_pct, factor_part, ganancia_max)

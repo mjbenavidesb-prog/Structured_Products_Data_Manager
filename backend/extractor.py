@@ -107,7 +107,7 @@ ELEMENT 1 (primary return generator — investor is typically LONG):
 - "Fixed Coupon": fixed rate regardless of performance.
 - "Digital Coupon": binary — full coupon if above barrier, zero otherwise. Typically one large payment.
 - "Capital Protected Participation": 100% capital floor + participation in upside (100% of initial guaranteed at maturity no matter what).
-- "Dual Directional": investor participates 1:1 in upside AND benefits from moderate downside (absolute value of return) within a buffer zone; full loss below barrier. Key signals: "twin win", "dual directional", "buffer", absolute return participation.
+- "Long Call (ATM)": investor is LONG a call struck at 100% of initial. For Dual Directional / Twin Win structures, element 1 is always a Long Call (ATM) — the "dual directional" nature comes from element 2 (KO Put ATM) + element 3 (Short Put ATM), not element 1. Key signals for Dual Directional overall: "twin win", "dual directional", "buffer", absolute return participation.
 - "Long Call (ATM)": investor is LONG a call struck at 100% of initial. Standard upside participation. Used in Airbag notes for the growth component. Leverage = participation rate (e.g., 1.50 for 150%).
 - "Long Call (ITM)": investor is LONG a call struck BELOW 100% of initial (e.g., 90% floor/buffer level). Creates 1:1 participation starting from the buffer level; combined with Short Call OTM to cap upside. Used in Call Spread / Buffered Note structures. The strike IS the floor/buffer. Leverage = 1.00 typically.
 
@@ -116,13 +116,13 @@ ELEMENT 2 (secondary derivative block):
 - "KI Put (European)": put activated only if worst-of <= KI price on the FINAL valuation date. Usually struck at 100%. Position: Short.
 - "KI Put (American)": put activated if worst-of <= KI price on ANY trading day. Higher risk than European. Position: Short.
 - "KO Put (ATM)": ATM put that KNOCKS OUT when worst-of <= barrier. Provides twin-win benefit within buffer zone. Used in Dual Directional structures. Position: Long.
-- "Vanilla Put (100%)": standard put struck at 100%, no barrier. Position: Short.
+- "Short Put (ATM)": short put struck at 100% (ATM at inception), no barrier. Used in Dual Directional to offset the cost of the Long KO Put ATM. Position: Short.
 - "Low Strike Call": investor is LONG a call with strike below 100%; leveraged upside. Leverage = 1/strike. Position: Long.
 - "Short Call (OTM)": investor SHORT a call above 100%, caps the maximum gain. Strike = 100% + max_gain/participation_rate. Used to cap upside in Call Spread and Airbag structures. Leverage = same as element 1. Position: Short.
 
 ELEMENT 3 (third block — used when product has three derivative components):
 - "KO Put (ATM)": same as element 2. Position: Long.
-- "Vanilla Put (100%)": Short put at 100% that offsets element 2 cost. Used in Dual Directional. Position: Short.
+- "Short Put (ATM)": Short put at 100% (ATM) that offsets the Long KO Put ATM cost. Used in Dual Directional / Twin Win. Position: Short.
 - "Short Call (OTM)": cap on levered element when element 1 is the main upside and element 2 is also upside. Position: Short.
 - "Short Put (OTM)": investor SHORT a put BELOW 100% (at airbag/buffer level). Below this level investor bears losses 1:1. Above this level, if element 1 is a Long Call ATM, the buffer zone between put strike and 100% gives full capital return ("airbag" effect). Position: Short. Key signal: "Airbag", "buffer zone", protection between barrier and 100%.
 - null: only two elements needed.
@@ -157,19 +157,19 @@ Reasoning: leverage = 1/0.75 = 1.333; KI observed only at final valuation → Eu
 
 EXAMPLE 2 — BNP Paribas Twin Win / Dual Directional (buffer 16.25%, barrier 83.75%, participation 1.00x, no cap):
 {
-  "elemento_1_tipo": "Dual Directional",
+  "elemento_1_tipo": "Long Call (ATM)",
   "elemento_1_leverage": 1.00,
   "elemento_1_posicion": "Long",
   "elemento_2_tipo": "KO Put (ATM)",
   "elemento_2_leverage": 2.00,
   "elemento_2_posicion": "Long",
-  "elemento_3_tipo": "Vanilla Put (100%)",
+  "elemento_3_tipo": "Short Put (ATM)",
   "elemento_3_leverage": 1.00,
   "elemento_3_posicion": "Short",
   "ganancia_maxima": "Ilimitada",
   "barrera_capital": 0.8375
 }
-Reasoning: Long Call ATM (1x) + Long KO Put ATM (2x, KO at 83.75%) + Short Put 100% (1x) = investor gains above AND below initial level within the 16.25% buffer. No upside cap → ganancia_maxima = "Ilimitada".
+Reasoning: Long Call ATM (1x) gives upside. Long KO Put ATM (2x, KO at 83.75%) gives twin-win benefit within buffer. Short Put ATM (1x) offsets the cost. Investor gains above AND below initial level within the 16.25% buffer. No upside cap → ganancia_maxima = "Ilimitada".
 
 EXAMPLE 3 — BNP Paribas Call Spread / Buffered Note (Nokia, floor 90%, max return 33.20%, participation 100%):
 {
