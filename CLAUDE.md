@@ -229,6 +229,33 @@ Same as Phoenix but unpaid coupons accumulate:
 | Coupon barrier | ~70–80%; below → no coupon paid that period |
 | Autocall barrier | ~100%; above → early redemption |
 
+### Buffered Note / Call Spread
+- Engineering: ZCB (at floor level) + Long Call ITM (strike = floor) + Short Call OTM (strike = floor + max_gain)
+- Payoff:
+  - P > cap: redemption = cap (max gain capped)
+  - floor ≤ P ≤ cap: redemption = P (1:1 participation from floor to cap)
+  - P < floor: redemption = floor (hard floor, max loss = 1 - floor)
+- Investor loses 1:1 in the zone between floor and initial (no airbag protection between barrier and 100%)
+- `barrera_capital` = floor level (e.g., 0.90 for 10% buffer)
+- `cap` = total redemption cap as factor (e.g., 1.332 for 33.2% max gain)
+- `ganancia_maxima` = cap - 100% (e.g., "33.20%")
+- Key signals: "Maximum Return", "Partial Principal Protection", flat payoff below barrier level
+- Example (201U): NOK 1Y Note — floor 90%, max return 33.20%, participation 100%
+
+### Airbag Note
+- Engineering: Long Call ATM × leverage + Short Call OTM × same leverage + Short Put OTM × 1.0 (at airbag level)
+- Payoff:
+  - P ≥ 100%: 100% + min(max_gain, leverage × (P-100%)) — levered, capped upside
+  - airbag_level ≤ P < 100%: 100% — **full capital return in the buffer zone** (this is the "airbag")
+  - P < airbag_level: P + (1 - airbag_level) — loses 1:1 from airbag level
+- Key distinction from Buffered Note: investor does NOT lose money between airbag level and 100%. The Short Put OTM at airbag level creates this zone.
+- `barrera_capital` = airbag level (e.g., 0.87 for 13% airbag buffer)
+- `factor_participacion` = leverage (e.g., 1.50 for 150%)
+- `cap` = 1 + max_gain_as_decimal (e.g., 1.26325 for 26.325% max gain)
+- `ganancia_maxima` = leverage × (cap_strike - 100%) (e.g., "26.33%")
+- Key signals: "Airbag", "Moderate Scenario = Specified Denomination × 100%", "Unfavourable Scenario = Specified Denomination × (100% - (buffer% - Performance))"
+- Example (206U): CACIB Airbag SPY/RSP/QQQ — barrier 87%, participation 150%, cap 26.325%
+
 ### Low Strike Leveraged
 - Strike set below spot at inception (e.g., strike = spot × 0.90)
 - Leverage = spot / strike (e.g., 6400 / 6000 = 1.067 embedded)

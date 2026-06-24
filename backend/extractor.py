@@ -99,38 +99,46 @@ CLASSIFICATION HINTS:
 
 ENGINEERING GUIDE — Decompose the product into its derivative building blocks:
 
-ELEMENT 1 (return generator — investor is LONG):
+ELEMENT 1 (primary return generator — investor is typically LONG):
 - "Daily Range Accrual": coupon paid proportional to fraction of trading days where each underlying closes >= coupon barrier. Key signal: "Relevant Accrual Fraction" or daily observation of basket.
 - "Phoenix Autocall": conditional coupon at periodic observation dates if worst-of >= coupon barrier; autocalls if >= trigger.
 - "Phoenix with Memory": Phoenix where missed coupons accumulate and are all paid when barrier is next observed.
 - "Athena Autocall": always pays coupon on autocall dates (no separate coupon barrier).
 - "Fixed Coupon": fixed rate regardless of performance.
 - "Digital Coupon": binary — full coupon if above barrier, zero otherwise. Typically one large payment.
-- "Capital Protected Participation": 100% capital floor + participation in upside.
+- "Capital Protected Participation": 100% capital floor + participation in upside (100% of initial guaranteed at maturity no matter what).
 - "Dual Directional": investor participates 1:1 in upside AND benefits from moderate downside (absolute value of return) within a buffer zone; full loss below barrier. Key signals: "twin win", "dual directional", "buffer", absolute return participation.
+- "Long Call (ATM)": investor is LONG a call struck at 100% of initial. Standard upside participation. Used in Airbag notes for the growth component. Leverage = participation rate (e.g., 1.50 for 150%).
+- "Long Call (ITM)": investor is LONG a call struck BELOW 100% of initial (e.g., 90% floor/buffer level). Creates 1:1 participation starting from the buffer level; combined with Short Call OTM to cap upside. Used in Call Spread / Buffered Note structures. The strike IS the floor/buffer. Leverage = 1.00 typically.
 
-ELEMENT 2 (secondary derivative block — may be Long or Short):
-- "Low Strike Put": put struck BELOW 100% of initial price. Investor bears loss when worst-of < strike at maturity. Leverage = 1/strike_pct (e.g. strike=75% → 1/0.75 = 1.333). European observation (final valuation date only). Redemption = Denomination × Final_worst/Strike_worst. Position: Short.
-- "KI Put (European)": put activated only if worst-of <= KI price on the FINAL valuation date. Usually struck at 100%. Leverage = 1.00. Position: Short.
+ELEMENT 2 (secondary derivative block):
+- "Low Strike Put": put struck BELOW 100% of initial price. Investor bears loss when worst-of < strike at maturity. Leverage = 1/strike_pct (e.g. strike=75% → 1/0.75 = 1.333). European observation (final valuation date only). Position: Short.
+- "KI Put (European)": put activated only if worst-of <= KI price on the FINAL valuation date. Usually struck at 100%. Position: Short.
 - "KI Put (American)": put activated if worst-of <= KI price on ANY trading day. Higher risk than European. Position: Short.
-- "KO Put (ATM)": ATM put that KNOCKS OUT if worst-of <= barrier on final valuation date. Provides upside from downside within buffer zone. Used in Dual Directional / Twin Win structures. Position: Long.
-- "Vanilla Put (100%)": standard put struck at 100%, no knock-in, observed at maturity. Position: Short.
-- "Low Strike Call": investor is LONG a call with strike below 100%; provides leveraged upside. Leverage = 1/strike. Position: Long.
-- null: fully capital protected — no secondary element.
+- "KO Put (ATM)": ATM put that KNOCKS OUT when worst-of <= barrier. Provides twin-win benefit within buffer zone. Used in Dual Directional structures. Position: Long.
+- "Vanilla Put (100%)": standard put struck at 100%, no barrier. Position: Short.
+- "Low Strike Call": investor is LONG a call with strike below 100%; leveraged upside. Leverage = 1/strike. Position: Long.
+- "Short Call (OTM)": investor SHORT a call above 100%, caps the maximum gain. Strike = 100% + max_gain/participation_rate. Used to cap upside in Call Spread and Airbag structures. Leverage = same as element 1. Position: Short.
 
-ELEMENT 3 (third derivative block if needed — used in complex structures):
-- "Low Strike Put": same as element 2 definition. Typically Short in element 3.
-- "KO Put (ATM)": same as element 2 definition.
-- "Vanilla Put (100%)": Short put at 100% that offsets part of element 2 cost. Used in Dual Directional structures.
-- "Short Call (OTM)": investor sells upside beyond a cap level. Provides a maximum gain cap. Position: Short.
-- null: no third element.
+ELEMENT 3 (third block — used when product has three derivative components):
+- "KO Put (ATM)": same as element 2. Position: Long.
+- "Vanilla Put (100%)": Short put at 100% that offsets element 2 cost. Used in Dual Directional. Position: Short.
+- "Short Call (OTM)": cap on levered element when element 1 is the main upside and element 2 is also upside. Position: Short.
+- "Short Put (OTM)": investor SHORT a put BELOW 100% (at airbag/buffer level). Below this level investor bears losses 1:1. Above this level, if element 1 is a Long Call ATM, the buffer zone between put strike and 100% gives full capital return ("airbag" effect). Position: Short. Key signal: "Airbag", "buffer zone", protection between barrier and 100%.
+- null: only two elements needed.
 
 LEVERAGE CALCULATION GUIDE:
 - Range Accrual / Phoenix coupon component: 1.00
 - Low Strike Put: leverage = 1.0 / strike_as_decimal (e.g. 75% strike → 1.333)
 - KI Put at 100% strike: 1.00
-- Participation / upside element: the stated participation rate (e.g. 1.33 for 133%)
+- Long Call (ATM) / Long Call (ITM): the stated participation rate (e.g. 1.50 for 150%). Default 1.00.
+- Short Call (OTM): SAME leverage as the Long Call element it caps (e.g. if element 1 is 1.50x Long Call ATM, element 2 is 1.50x Short Call OTM).
+- Short Put (OTM): 1.00 (airbag put absorbs losses 1:1 below barrier).
+- Dual Directional / twin win call: 1.00
 - If leverage for an element is not explicitly stated and cannot be calculated, use 1.00
+
+CAP FIELD: Store as the TOTAL redemption level factor (e.g. 1.332 for a 33.2% max gain, 1.263 for 26.3%). If the termsheet states "Maximum Return = 33.20%", cap = 1.3320.
+BARRERA_CAPITAL for participation products: store the barrier/floor/buffer level as decimal (e.g. 0.90 for 10% buffer, 0.87 for 13% airbag level).
 
 EXAMPLE 1 — Nomura 36M Callable Daily Range Accrual (Strike=75%, KI=75%, European final obs):
 {
@@ -158,9 +166,45 @@ EXAMPLE 2 — BNP Paribas Twin Win / Dual Directional (buffer 16.25%, barrier 83
   "elemento_3_tipo": "Vanilla Put (100%)",
   "elemento_3_leverage": 1.00,
   "elemento_3_posicion": "Short",
-  "ganancia_maxima": "Ilimitada"
+  "ganancia_maxima": "Ilimitada",
+  "barrera_capital": 0.8375
 }
 Reasoning: Long Call ATM (1x) + Long KO Put ATM (2x, KO at 83.75%) + Short Put 100% (1x) = investor gains above AND below initial level within the 16.25% buffer. No upside cap → ganancia_maxima = "Ilimitada".
+
+EXAMPLE 3 — BNP Paribas Call Spread / Buffered Note (Nokia, floor 90%, max return 33.20%, participation 100%):
+{
+  "elemento_1_tipo": "Long Call (ITM)",
+  "elemento_1_leverage": 1.00,
+  "elemento_1_posicion": "Long",
+  "elemento_2_tipo": "Short Call (OTM)",
+  "elemento_2_leverage": 1.00,
+  "elemento_2_posicion": "Short",
+  "elemento_3_tipo": null,
+  "elemento_3_leverage": null,
+  "elemento_3_posicion": null,
+  "ganancia_maxima": "33.20%",
+  "barrera_capital": 0.90,
+  "cap": 1.3320
+}
+Reasoning: ZCB (90%) + Long Call struck at 90% (ITM since market starts at 100%) + Short Call struck at 133.2% (OTM). Investor participates 1:1 upside up to 33.2% gain; loses 1:1 in moderate downside; hard floor at 90% (max loss 10%). Key signal: "Maximum Return", partial principal protection at 90%.
+
+EXAMPLE 4 — Crédit Agricole Airbag Note (worst-of SPY/RSP/QQQ, barrier 87%, participation 150%, cap 26.325%):
+{
+  "elemento_1_tipo": "Long Call (ATM)",
+  "elemento_1_leverage": 1.50,
+  "elemento_1_posicion": "Long",
+  "elemento_2_tipo": "Short Call (OTM)",
+  "elemento_2_leverage": 1.50,
+  "elemento_2_posicion": "Short",
+  "elemento_3_tipo": "Short Put (OTM)",
+  "elemento_3_leverage": 1.00,
+  "elemento_3_posicion": "Short",
+  "ganancia_maxima": "26.33%",
+  "barrera_capital": 0.87,
+  "cap": 1.26325,
+  "factor_participacion": 1.50
+}
+Reasoning: Long Call ATM (1.5x) caps with Short Call OTM (1.5x at ~117.5%) = levered capped upside. Short Put OTM at 87% = investor bears losses below 87% only. Between 87% and 100% the investor gets 100% back ("airbag" zone). Key signals: "Airbag", "Moderate Scenario = 100%", buffer below strike pays back full capital.
 
 Return ONLY the JSON object. No markdown, no explanation, no code fences.
 """

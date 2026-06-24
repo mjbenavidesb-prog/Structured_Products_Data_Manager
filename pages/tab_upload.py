@@ -51,6 +51,8 @@ _ELEM_1_TYPES = [
     "Digital Coupon",
     "Capital Protected Participation",
     "Dual Directional",
+    "Long Call (ATM)",
+    "Long Call (ITM)",
     "Other",
 ]
 _ELEM_2_TYPES = [
@@ -61,6 +63,7 @@ _ELEM_2_TYPES = [
     "KO Put (ATM)",
     "Vanilla Put (100%)",
     "Low Strike Call",
+    "Short Call (OTM)",
     "Other",
 ]
 _ELEM_3_TYPES = [
@@ -71,6 +74,7 @@ _ELEM_3_TYPES = [
     "KO Put (ATM)",
     "Vanilla Put (100%)",
     "Short Call (OTM)",
+    "Short Put (OTM)",
     "Other",
 ]
 _POSITIONS = ["Long", "Short"]
