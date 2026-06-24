@@ -105,7 +105,7 @@ def render():
             if st.button("Extract with Claude AI", type="primary", use_container_width=True):
                 with st.spinner("Reading termsheet..."):
                     try:
-                        result = extract_termsheet(uploaded.read(), api_key)
+                        result = extract_termsheet(uploaded.read(), api_key, filename=uploaded.name)
                         st.session_state["extracted"] = result
                         st.success("Extraction complete — review and correct the fields below.")
                     except Exception as e:

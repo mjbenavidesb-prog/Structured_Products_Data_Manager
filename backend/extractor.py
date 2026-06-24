@@ -240,7 +240,7 @@ def _rescue_isin(pdf_b64: str, client) -> str | None:
     return m.group(1) if m else None
 
 
-def extract_termsheet(pdf_bytes: bytes, api_key: str) -> dict:
+def extract_termsheet(pdf_bytes: bytes, api_key: str, filename: str = "") -> dict:
     client = anthropic.Anthropic(api_key=api_key)
     pdf_b64 = base64.standard_b64encode(pdf_bytes).decode("utf-8")
 
@@ -277,6 +277,11 @@ def extract_termsheet(pdf_bytes: bytes, api_key: str) -> dict:
         rescued = _rescue_isin(pdf_b64, client)
         if rescued:
             result["isin"] = rescued
+
+    if not result.get("isin") and filename:
+        m = _ISIN_RE.search(filename)
+        if m:
+            result["isin"] = m.group(1)
 
     return result
 
