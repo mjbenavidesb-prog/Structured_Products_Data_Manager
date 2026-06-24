@@ -3,7 +3,11 @@ import pandas as pd
 from datetime import date, timedelta
 from pathlib import Path
 from backend.database import get_all_products
-from backend.factsheet import generate_factsheet_pdf
+from backend.factsheet import (
+    generate_factsheet_pdf,
+    generate_factsheet_participation,
+    is_participation_product,
+)
 from backend.market_data import resolve_ticker
 import backend.config as cfg
 
@@ -137,6 +141,7 @@ def _validate(ftype: str, p: dict) -> tuple[bool, str]:
         return True, ""
 
     if ftype == "Ejecutado":
+        # Participation products always pass for Ejecutado type
         return True, ""
 
     return False, "Tipo de factsheet desconocido."
@@ -387,16 +392,28 @@ def render():
 
         with st.spinner(f"Generating {ftype} factsheet — fetching market data..."):
             try:
-                pdf_bytes = generate_factsheet_pdf(
-                    product=product,
-                    event_type=ftype,
-                    company_name=company_name,
-                    primary=primary,
-                    secondary=secondary,
-                    verified_autocall_date=ac_date_str if ftype == "Autocall" else None,
-                    logo_bytes=logo_bytes,
-                    disclaimer=disclaimer.strip() or None,
-                )
+                # Route participation products to specialized generator
+                if is_participation_product(product):
+                    pdf_bytes = generate_factsheet_participation(
+                        product=product,
+                        event_type=ftype,
+                        company_name=company_name,
+                        primary=primary,
+                        secondary=secondary,
+                        logo_bytes=logo_bytes,
+                        disclaimer=disclaimer.strip() or None,
+                    )
+                else:
+                    pdf_bytes = generate_factsheet_pdf(
+                        product=product,
+                        event_type=ftype,
+                        company_name=company_name,
+                        primary=primary,
+                        secondary=secondary,
+                        verified_autocall_date=ac_date_str if ftype == "Autocall" else None,
+                        logo_bytes=logo_bytes,
+                        disclaimer=disclaimer.strip() or None,
+                    )
                 st.success(f"Factsheet **{ftype}** generado correctamente.")
 
                 file_name = f"Factsheet_{ftype}_{selected[:40].replace(' ', '_')}.pptx"

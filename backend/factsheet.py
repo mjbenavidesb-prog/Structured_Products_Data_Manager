@@ -546,6 +546,539 @@ def _fetch_perf(unds, fecha_inicio, cutoff):
         return pd.DataFrame(), pd.Series(dtype=float)
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# PARTICIPATION PRODUCT FACTSHEETS
+# Dual Directional (Twin Win), Call Spread, Airbag, Capital Protected
+# ══════════════════════════════════════════════════════════════════════════════
+
+_PART_ELEM_TYPES = {
+    "Dual Directional", "Long Call (ATM)", "Long Call (ITM)",
+    "Capital Protected Participation",
+}
+
+def is_participation_product(product: dict) -> bool:
+    return str(product.get("elemento_1_tipo") or "").strip() in _PART_ELEM_TYPES
+
+
+def _chart_payoff_dd(barrier_pct: float,
+                     factor_part: float = 1.0,
+                     ganancia_max_str: str = "Ilimitada") -> BytesIO:
+    """
+    Twin Win / Dual Directional payoff diagram.
+    barrier_pct : BUFFER size as a percentage  (e.g. 16.25 for a 16.25 % buffer)
+                  The actual barrier LEVEL = 100 % – barrier_pct  (e.g. 83.75 %)
+    Uses underlying LEVEL on x-axis, product LEVEL on y-axis (both % of initial).
+    """
+    blevel = 100 - barrier_pct          # barrier level   e.g. 83.75
+    x_min, x_max = 55.0, 148.0
+
+    # --- three segments ----------------------------------------------------
+    x1 = np.linspace(x_min, blevel, 300)     # loss zone  (x < blevel)
+    y1 = x1.copy()                             # product = underlying
+
+    x2 = np.linspace(blevel, 100.0, 300)      # twin-win zone
+    y2 = 200.0 - x2                            # product = 200 – underlying
+
+    x3 = np.linspace(100.0, x_max, 300)       # upside zone
+    y3 = 100.0 + (x3 - 100.0) * factor_part
+
+    fig, ax = plt.subplots(figsize=(4.2, 3.6))
+    fig.patch.set_facecolor("white")
+    ax.set_facecolor("white")
+
+    ax.plot(x1, y1, color="#1A1A2E", linewidth=2.2)
+    # jump — show as short dashed vertical at the barrier
+    ax.plot([blevel, blevel], [blevel, 100 + barrier_pct],
+            color="#1A1A2E", linewidth=1.4, linestyle=":")
+    ax.plot(x2, y2, color="#1A1A2E", linewidth=2.2)
+    ax.plot(x3, y3, color="#1A1A2E", linewidth=2.2)
+
+    # subtle shading for twin-win buffer zone
+    ax.fill_between(x2, 100, y2, alpha=0.10, color="#2563EB")
+
+    # reference lines
+    ax.axhline(100, color="#9CA3AF", linewidth=0.7, linestyle="--", alpha=0.5)
+    ax.axvline(100, color="#9CA3AF", linewidth=0.7, linestyle="--", alpha=0.5)
+    ax.axvline(blevel, color="#DC2626", linewidth=0.7, linestyle="--", alpha=0.45)
+
+    # barrier level label on x-axis
+    ax.annotate(f"{blevel:.2f}%",
+                xy=(blevel, x_min + 0.5), fontsize=7.5,
+                ha="center", va="bottom", color="#DC2626", fontweight="bold")
+
+    # "Punto inicial" dot + annotation
+    ax.scatter([100], [100], color="#1A1A2E", s=18, zorder=6)
+    ax.annotate("Punto inicial\n(100%)", xy=(100, 100),
+                xytext=(104, 91), fontsize=7.5, ha="left", va="top",
+                color="#475569",
+                arrowprops=dict(arrowstyle="->", color="#9CA3AF", lw=0.7))
+
+    # max-gain label with arrow
+    gmax_low = ganancia_max_str.lower()
+    if "ilimitad" in gmax_low or "unlimited" in gmax_low:
+        label = "Ganancia máxima:\nIlimitada"
+    else:
+        label = f"Ganancia máxima:\n{ganancia_max_str}"
+    arrow_x = x_max - 5
+    arrow_y = y3[-1]
+    ax.annotate(label,
+                xy=(arrow_x, arrow_y - 3), fontsize=7.5,
+                ha="center", va="top", color="#1A1A2E",
+                arrowprops=None)
+    ax.annotate("", xy=(arrow_x + 3, arrow_y + 3),
+                xytext=(arrow_x, arrow_y - 3),
+                arrowprops=dict(arrowstyle="->", color="#1A1A2E", lw=1.0))
+
+    # slope labels
+    ax.text(68, 65, "1:1", fontsize=7.5, ha="center", color="#6B7280")
+    ax.text(90, 112, "1:1", fontsize=7.5, ha="center", color="#6B7280")
+    fp_label = f"{factor_part:.2f}x" if factor_part != 1.0 else "1:1"
+    ax.text(132, 135, fp_label, fontsize=7.5, ha="center", color="#6B7280")
+
+    ax.set_xlabel("Subyacente", fontsize=8.5, color="#6B7280")
+    ax.set_ylabel("Producto",   fontsize=8.5, color="#6B7280")
+    ax.set_xlim(x_min, x_max)
+    ax.set_ylim(x_min, x_max)
+    ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda v, _: f"{v:.0f}%"))
+    ax.xaxis.set_major_formatter(plt.FuncFormatter(lambda v, _: f"{v:.0f}%"))
+    ax.spines[["top","right"]].set_visible(False)
+    ax.spines[["left","bottom"]].set_color("#E5E7EB")
+    ax.tick_params(colors="#6B7280", length=3, labelsize=7.5)
+    ax.grid(axis="both", linestyle="--", alpha=0.15, linewidth=0.5)
+
+    fig.tight_layout(pad=0.35)
+    buf = BytesIO()
+    fig.savefig(buf, format="png", dpi=150, bbox_inches="tight", facecolor="white")
+    plt.close(fig)
+    return buf
+
+
+def _scen_returns(barrier_pct: float, n_unds: int) -> list[tuple]:
+    """
+    Generate 5 illustrative scenarios for the scenario table.
+    Returns list of (und_rets: list[float], worst: float, prod_ret: float).
+    und_rets are percentage returns (e.g., 45.0 for 45%).
+    """
+    b = barrier_pct  # e.g. 16.25
+    # 5 scenario worst-of targets (as %)
+    targets = [45.0, 18.0, -(b * 0.31), -(b - 0.5), -(b + 19.0)]
+
+    # Build illustrative per-underlying returns for up to 3 underlyings
+    # such that min(row) == target
+    raw3 = [
+        [45.0, 55.0, 60.0],
+        [30.0, 18.0, 20.0],
+        [10.0, 7.0,  targets[2]],
+        [-b*0.31, -b*0.62, targets[3]],
+        [-(b+9.0), -(b+5.0), -(b+19.0)],
+    ]
+
+    out = []
+    for i, row in enumerate(raw3):
+        und_rets = row[:n_unds]
+        worst    = min(und_rets)
+        w        = worst / 100
+        if w >= 0:
+            p_ret = w * 1.0  # factor_part applied later via caller
+        elif w >= -b/100:
+            p_ret = -w
+        else:
+            p_ret = w
+        out.append((und_rets, worst, p_ret * 100))
+    return out
+
+
+def _build_scenario_tbl(slide, x, y, w, unds: list, barrier_pct: float,
+                         factor_part: float, pri: RGBColor):
+    """Scenario example table (rows = underlyings + worst-of + product return)."""
+    n_u = min(len(unds), 3)
+    scenarios = _scen_returns(barrier_pct, n_u)
+
+    row_labels = unds[:n_u] + ["Rend. subyacente", "Rentabilidad\ndel Producto"]
+    n_rows = len(row_labels)
+    n_cols = 1 + 5  # label + 5 examples
+    row_h  = 0.21
+    total_h = n_rows * row_h
+
+    tbl = slide.shapes.add_table(
+        n_rows, n_cols, Inches(x), Inches(y), Inches(w), Inches(total_h)
+    ).table
+
+    emu_w = int(Inches(w))
+    tbl.columns[0].width = int(emu_w * 0.30)
+    for ci in range(1, 6):
+        tbl.columns[ci].width = int(emu_w * 0.14)
+
+    for ri in range(n_rows):
+        tbl.rows[ri].height = int(Inches(row_h))
+
+    # Header row
+    _cell_fmt(tbl.cell(0, 0), "Subyacente",  size=7.5, bold=True,
+              align=PP_ALIGN.CENTER, fill=pri, color=_WHITE)
+    for ci in range(1, 6):
+        _cell_fmt(tbl.cell(0, ci), f"Ejm {ci}", size=7.5, bold=True,
+                  align=PP_ALIGN.CENTER, fill=pri, color=_WHITE)
+
+    # Underlying rows
+    for ri in range(1, n_u + 1):
+        und = unds[ri - 1]
+        bg = _LIGHT if ri % 2 == 0 else _WHITE
+        _cell_fmt(tbl.cell(ri, 0), und, size=7.5, bold=True, bg=bg)
+        for ci, (und_rets, _, _) in enumerate(scenarios, 1):
+            pct_val = und_rets[ri - 1] if ri - 1 < len(und_rets) else 0.0
+            sign = "+" if pct_val >= 0 else ""
+            _cell_fmt(tbl.cell(ri, ci), f"{sign}{pct_val:.0f}%",
+                      size=7.5, align=PP_ALIGN.CENTER, bg=bg)
+
+    # Worst-of row
+    ri_worst = n_u + 1
+    bg = _LIGHT if ri_worst % 2 == 0 else _WHITE
+    _cell_fmt(tbl.cell(ri_worst, 0), "Rend. subyacente",
+              size=7.5, bold=True, bg=bg)
+    for ci, (_, worst, _) in enumerate(scenarios, 1):
+        sign = "+" if worst >= 0 else ""
+        _cell_fmt(tbl.cell(ri_worst, ci), f"{sign}{worst:.2f}%",
+                  size=7.5, align=PP_ALIGN.CENTER, bg=bg)
+
+    # Product return row (bold, color-coded)
+    ri_prod = n_u + 2
+    bg = _LIGHT if ri_prod % 2 == 0 else _WHITE
+    _cell_fmt(tbl.cell(ri_prod, 0), "Rentabilidad\ndel Producto",
+              size=7.5, bold=True, bg=bg)
+    for ci, (_, _, p_ret) in enumerate(scenarios, 1):
+        # Apply factor_part to positive returns only
+        adj = p_ret * factor_part if p_ret > 0 else p_ret
+        sign = "+" if adj >= 0 else ""
+        col = _rgb("#16A34A") if adj > 0 else (_DARK if adj == 0 else _rgb("#DC2626"))
+        _cell_fmt(tbl.cell(ri_prod, ci), f"{sign}{adj:.2f}%",
+                  size=7.5, bold=True, align=PP_ALIGN.CENTER, bg=bg, color=col)
+
+    return total_h
+
+
+def _narrative_participation(product: dict, elem_tipo: str) -> list[str]:
+    """Narrative description paragraph for participation products."""
+    asset_class  = str(product.get("asset_class") or "renta variable")
+    plazo_meses  = product.get("plazo_meses")
+    plazo_str    = f"{int(float(plazo_meses))} meses" if plazo_meses else "—"
+    factor_part  = _sf(product.get("factor_participacion")) or 1.0
+    barrera_cap  = _sf(product.get("barrera_capital")) or 0
+    buffer_pct   = (1 - barrera_cap) * 100 if barrera_cap <= 1 else (100 - barrera_cap)
+
+    ganancia_max = str(product.get("ganancia_maxima") or "Ilimitada").strip()
+    if ganancia_max.lower() in ("ilimitada", "unlimited", ""):
+        gmax_phrase = "sin límite de ganancia"
+    else:
+        gmax_phrase = f"hasta un máximo de {ganancia_max}"
+
+    fp_str = f"{factor_part:.2f}x" if factor_part else "1.00x"
+
+    if elem_tipo == "Dual Directional":
+        return [
+            f"El producto brinda exposición a la {asset_class.lower()} a {plazo_str}. "
+            f"El inversionista se beneficiará del upside del subyacente multiplicado por "
+            f"un factor de participación de {fp_str} {gmax_phrase}. A su vez, se "
+            f"beneficiará 1:1 del downside hasta una caída de {buffer_pct:.2f}%. "
+            f"Luego de ese límite, el inversionista está expuesto en un 100% al "
+            f"rendimiento negativo del subyacente."
+        ]
+    if elem_tipo in ("Long Call (ATM)", "Long Call (ITM)"):
+        return [
+            f"El producto brinda exposición a la {asset_class.lower()} a {plazo_str}. "
+            f"El inversionista participa del upside del subyacente con un factor de "
+            f"{fp_str} {gmax_phrase}. El capital está protegido hasta una caída de "
+            f"{buffer_pct:.2f}% del nivel inicial."
+        ]
+    # Capital Protected default
+    return [
+        f"El producto brinda exposición a la {asset_class.lower()} a {plazo_str}. "
+        f"El inversionista participa del upside del subyacente con un factor de "
+        f"{fp_str} {gmax_phrase}. El 100% del capital está protegido al vencimiento "
+        f"independientemente del comportamiento del subyacente."
+    ]
+
+
+def _scenario_bullets(elem_tipo: str, buffer_pct: float) -> list[str]:
+    """Bullet scenario descriptions for the right column."""
+    b_str = f"{buffer_pct:.2f}%"
+    if elem_tipo == "Dual Directional":
+        return [
+            "A vencimiento:",
+            f"▪  Escenario 1: Si el subyacente tiene un rendimiento positivo, el "
+            f"inversionista recibe la apreciación del subyacente multiplicado por el "
+            f"factor de participación.",
+            f"▪  Escenario 2: Si el subyacente tiene un rendimiento negativo y mayor a "
+            f"-{b_str}, el inversionista se beneficia 1:1 de la pérdida del subyacente.",
+            f"▪  Escenario 3: Si el subyacente tiene un rendimiento negativo y menor a "
+            f"-{b_str}, el inversionista experimenta el mismo rendimiento del subyacente.",
+        ]
+    return [
+        "A vencimiento:",
+        f"▪  Escenario 1: Rendimiento positivo — el inversionista recibe la apreciación "
+        f"del subyacente multiplicado por el factor de participación.",
+        f"▪  Escenario 2: Caída dentro del buffer ({b_str}) — el capital queda protegido.",
+        f"▪  Escenario 3: Caída por debajo de {b_str} — exposición al rendimiento "
+        f"negativo del subyacente.",
+    ]
+
+
+def generate_factsheet_participation(
+    product: dict,
+    event_type: str,
+    company_name: str,
+    primary: str,
+    secondary: str = "#DC2626",
+    logo_bytes: bytes | None = None,
+    disclaimer: str | None = None,
+) -> bytes:
+    """
+    A4 factsheet for participation products (Dual Directional, Call Spread, Airbag…).
+    Layout mirrors the Credicorp Capital twin-win template:
+      top-left : narrative + initial prices table
+      top-right: characteristics table
+      bot-left : payoff diagram
+      bot-right: scenario bullets + scenario table
+    """
+    if not _PPTX:
+        raise ImportError("python-pptx not installed.")
+
+    PRI = _rgb(primary)
+    SEC = _rgb(secondary)
+
+    # ── Extract product fields ─────────────────────────────────────────────
+    name        = str(product.get("nombre_producto") or "")
+    asset_class = str(product.get("asset_class") or "—")
+    tipo        = str(product.get("tipo") or "Nota Estructurada")
+    moneda      = str(product.get("moneda") or "USD")
+    isin        = str(product.get("isin") or "—")
+    contraparte = str(product.get("contraparte") or "—")
+    vehiculo    = str(product.get("vehiculo") or "—")
+    tipo_cliente = str(product.get("tipo_cliente") or "—")
+
+    fecha_inicio  = _parse_date(product.get("fecha_inicio") or product.get("fecha_strike"))
+    fecha_obs_fin = _parse_date(product.get("fecha_obs_final"))
+    fecha_vencto  = _parse_date(
+        product.get("fecha_vencimiento") or
+        product.get("fecha_obs_final") or
+        product.get("fecha_obs_final_ac")
+    )
+
+    plazo_meses  = _sf(product.get("plazo_meses"))
+    factor_part  = _sf(product.get("factor_participacion")) or 1.0
+    barrera_cap  = _sf(product.get("barrera_capital")) or 0
+    if barrera_cap > 1:
+        barrera_cap /= 100
+    buffer_pct   = (1.0 - barrera_cap) * 100   # e.g. 16.25
+
+    ganancia_max = str(product.get("ganancia_maxima") or "Ilimitada").strip()
+    elem_tipo    = str(product.get("elemento_1_tipo") or "")
+
+    unds = [str(product.get(f"underlying_{i}")).strip()
+            for i in range(1, 5)
+            if product.get(f"underlying_{i}") and
+               str(product.get(f"underlying_{i}")).strip() not in ("", "nan", "None")]
+
+    strikes = {u: _sf(product.get(f"strike_{i}"))
+               for i, u in enumerate(unds, 1)
+               if _sf(product.get(f"strike_{i}"))}
+
+    und_long = [_UND_LABELS.get(u, u) for u in unds]
+    if len(unds) > 1:
+        und_desc = "Worst of: " + ", ".join(und_long)
+        sub_desc = ("Opción Worst of sobre el " + " / ".join(und_long))
+    else:
+        und_desc = und_long[0] if und_long else "—"
+        sub_desc = und_desc
+
+    # ── Derived strings ────────────────────────────────────────────────────
+    plazo_str   = f"{int(plazo_meses)} meses" if plazo_meses else "—"
+    moneda_str  = "Dólares Americanos" if "USD" in moneda.upper() else moneda
+    fp_str      = f"{factor_part:.2f}x"
+    gmax_disp   = ganancia_max if ganancia_max else "Ilimitada"
+    barr_disp   = f"{buffer_pct:.2f}%"  # show buffer size (e.g., "16.25%")
+
+    # ── Characteristics rows ───────────────────────────────────────────────
+    caract_rows = [
+        ("Plataforma",           vehiculo),
+        ("Cliente",              tipo_cliente),
+        ("Clasificación",        asset_class),
+        ("Tipo de producto",     tipo),
+        ("Concentración máxima", "5% de la cartera"),
+        ("Subyacente",           sub_desc),
+        ("Moneda",               moneda_str),
+        ("Plazo",                plazo_str),
+        ("Riesgo del producto",  contraparte),
+        ("Pago del Retorno",     "Al vencimiento"),
+        ("Barrera",              barr_disp),
+        ("Factor de Participación", fp_str),
+        ("Ganancia Máxima",      gmax_disp),
+        ("ISIN",                 isin),
+        ("Fecha de Observación inicial", _fmt_short(fecha_inicio)),
+        ("Fecha de Observación final",   _fmt_short(fecha_obs_fin or fecha_vencto)),
+        ("Fecha de Vencimiento (pago)",  _fmt_short(fecha_vencto)),
+    ]
+    caract_rows = [(k, v) for k, v in caract_rows if v and v not in ("—", "")]
+
+    # ── Narrative & bullets ────────────────────────────────────────────────
+    narrative = _narrative_participation(product, elem_tipo)
+    bullets   = _scenario_bullets(elem_tipo, buffer_pct)
+
+    # ── Charts ────────────────────────────────────────────────────────────
+    payoff_buf = _chart_payoff_dd(buffer_pct, factor_part, ganancia_max)
+
+    # ── BUILD SLIDE ────────────────────────────────────────────────────────
+    prs = Presentation()
+    prs.slide_width  = Inches(_W)
+    prs.slide_height = Inches(_H)
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    for ph in list(slide.placeholders):
+        ph._element.getparent().remove(ph._element)
+
+    # Y constants
+    Y_HDR   = 0.00;  H_HDR  = 0.55
+    Y_TTL   = 0.58;  H_TTL  = 0.26
+    Y_INFO  = 0.88;  H_INFO = 0.22
+    Y_BARS  = 1.14;  H_BAR  = 0.22
+    Y_TOP   = 1.40;  H_TOP  = 4.00
+    Y_BBAR  = 5.44;  H_BBAR = 0.22
+    Y_BOT   = 5.70;  H_BOT  = 4.60
+    Y_DISC  = 10.34; H_DISC = 0.60
+    Y_FOOT  = 10.96; H_FOOT = 0.22
+
+    # 1. Header bar + logo/name
+    _rect(slide, 0, Y_HDR, _W, H_HDR, PRI)
+    if logo_bytes:
+        slide.shapes.add_picture(
+            BytesIO(logo_bytes), Inches(_ML), Inches(Y_HDR + 0.04),
+            width=None, height=Inches(H_HDR - 0.08))
+    else:
+        _txt(slide, _ML, Y_HDR + 0.09, 2.5, H_HDR - 0.18,
+             company_name, size=9, bold=True, color=_WHITE)
+
+    bw = 1.0
+    badge = _rect(slide, _W - bw - 0.20, Y_HDR + 0.09, bw, H_HDR - 0.18, _WHITE)
+    btf = badge.text_frame
+    btf.margin_left = btf.margin_right = Inches(0.05)
+    btf.margin_top  = btf.margin_bottom = Inches(0.02)
+    bp = btf.paragraphs[0]; bp.alignment = PP_ALIGN.CENTER
+    br = bp.add_run()
+    br.text = event_type.upper()
+    br.font.name = "Inter"; br.font.size = Pt(9)
+    br.font.bold = True; br.font.color.rgb = PRI
+
+    # 2. Product title
+    _txt(slide, _ML, Y_TTL, _CW, H_TTL,
+         f"{event_type.upper()} – {name}",
+         size=11, bold=True, color=SEC)
+
+    # 3. Full-width INFO bar
+    _bar(slide, _ML, Y_INFO, _CW, H_INFO, "INFORMACIÓN DEL PRODUCTO", SEC, size=9)
+
+    # 4. Dual section bars
+    _bar(slide, _ML, Y_BARS, _LW, H_BAR, "DESCRIPCIÓN Y ESTRATEGIA", PRI, size=9)
+    _bar(slide, _RX, Y_BARS, _RW, H_BAR, "CARACTERÍSTICAS GENERALES",  PRI, size=9)
+
+    # 5. LEFT TOP — narrative + initial prices
+    cursor = Y_TOP
+    _multiline_txt(slide, _ML, cursor, _LW, 1.30, narrative, size=9,
+                   align=PP_ALIGN.JUSTIFY)
+    cursor += 1.38
+
+    # initial prices table
+    if strikes:
+        n_pr  = len(strikes)
+        pr_h  = 0.22 * (n_pr + 1)  # header + data rows
+        tbl_p = slide.shapes.add_table(
+            n_pr + 1, 2,
+            Inches(_ML), Inches(cursor),
+            Inches(_LW), Inches(pr_h)
+        ).table
+        emu = int(Inches(_LW))
+        tbl_p.columns[0].width = int(emu * 0.42)
+        tbl_p.columns[1].width = int(emu * 0.58)
+        for ri in range(n_pr + 1):
+            tbl_p.rows[ri].height = int(Inches(0.22))
+        _cell_fmt(tbl_p.cell(0, 0), "Subyacente", bold=True,
+                  fill=PRI, color=_WHITE, align=PP_ALIGN.CENTER, size=8)
+        _cell_fmt(tbl_p.cell(0, 1), "Precio Inicial", bold=True,
+                  fill=PRI, color=_WHITE, align=PP_ALIGN.CENTER, size=8)
+        for ri, (u, val) in enumerate(strikes.items(), 1):
+            bg = _LIGHT if ri % 2 == 0 else _WHITE
+            _cell_fmt(tbl_p.cell(ri, 0), u, size=8, bold=True,
+                      align=PP_ALIGN.CENTER, bg=bg)
+            _cell_fmt(tbl_p.cell(ri, 1), f"{val:,.2f}", size=8,
+                      align=PP_ALIGN.CENTER, bg=bg)
+        cursor += pr_h + 0.12
+
+    # small footnote below prices
+    _txt(slide, _ML, cursor, _LW, 0.28,
+         "*Rating Crediticio: Grado de Inversión. Las notas estructuradas califican "
+         "como \"senior unsecured debt\" en la estructura de capital de las contrapartes.",
+         size=7.5, color=_MUTED, italic=True)
+
+    # 6. RIGHT TOP — characteristics table
+    _build_caract_table(slide, _RX, Y_TOP, _RW, caract_rows, PRI)
+
+    # 7. Bottom dual bars
+    _bar(slide, _ML, Y_BBAR, _LW, H_BBAR, "ESTRUCTURA DEL PRODUCTO", SEC, size=9)
+    _bar(slide, _RX, Y_BBAR, _RW, H_BBAR, "ESCENARIOS DE CAPITAL",  SEC, size=9)
+
+    # 8. LEFT BOTTOM — payoff diagram
+    _embed(slide, payoff_buf, _ML, Y_BOT, _LW, H_BOT * 0.78)
+
+    # 9. RIGHT BOTTOM — scenario bullets + table
+    blt_x = _RX; blt_y = Y_BOT; blt_w = _RW
+    # bullets text
+    tb = slide.shapes.add_textbox(
+        Inches(blt_x), Inches(blt_y), Inches(blt_w), Inches(1.50))
+    tf = tb.text_frame; tf.word_wrap = True
+    tf.margin_left = tf.margin_right = Inches(0)
+    tf.margin_top  = tf.margin_bottom = Inches(0)
+    for li, line in enumerate(bullets):
+        p = tf.paragraphs[0] if li == 0 else tf.add_paragraph()
+        p.space_before = Pt(3) if li > 0 else Pt(0)
+        p.space_after  = Pt(0)
+        run = p.add_run()
+        run.text = line
+        run.font.name  = "Inter"
+        run.font.size  = Pt(8.5)
+        run.font.bold  = (li == 0)
+        run.font.color.rgb = _DARK
+
+    # scenario sub-bar
+    scen_bar_y = Y_BOT + 1.60
+    _bar(slide, _RX, scen_bar_y, _RW, 0.20,
+         "TABLA DE EJEMPLO DE RENDIMIENTOS", PRI, size=8)
+
+    # scenario table
+    scen_tbl_y = scen_bar_y + 0.24
+    _build_scenario_tbl(
+        slide, _RX, scen_tbl_y, _RW,
+        unds, buffer_pct, factor_part, PRI
+    )
+
+    # 10. Disclaimer / footnote
+    disc_text = (
+        disclaimer if disclaimer
+        else "La colocación de la nota estructurada es por oferta privada. "
+             "Credicorp Capital no garantiza el pago de rendimiento y/o principal "
+             "de los valores. Los factores de riesgo incluyen riesgo de mercado, "
+             "riesgo del emisor y riesgo de liquidez."
+    )
+    _txt(slide, _ML, Y_DISC, _CW, H_DISC, disc_text,
+         size=7.5, italic=True, color=_MUTED)
+
+    _txt(slide, _ML, Y_FOOT, _CW, H_FOOT,
+         f"*Al vencimiento. La rentabilidad esperada no incluye el efecto del impuesto "
+         f"correspondiente a cada inversionista.",
+         size=7.5, italic=True, color=_MUTED)
+
+    buf = BytesIO()
+    prs.save(buf)
+    buf.seek(0)
+    return buf.getvalue()
+
+
 # ── Main entry point ───────────────────────────────────────────────────────────
 
 def generate_factsheet_pdf(product: dict, event_type: str, company_name: str,
