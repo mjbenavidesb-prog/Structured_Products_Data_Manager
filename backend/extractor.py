@@ -210,6 +210,36 @@ Return ONLY the JSON object. No markdown, no explanation, no code fences.
 """
 
 
+_ISIN_RESCUE_PROMPT = """Read this document and find the ISIN code.
+
+An ISIN is exactly 12 characters: 2 uppercase country-code letters + 10 alphanumeric characters.
+Common prefixes: XS, US, DE, FR, CH, GB, LU, NL, IT, ES, JP, AU.
+US ISINs (starting "US") are often printed next to or just after a 9-char CUSIP code.
+Scan every page, every table cell, every header, every footer.
+
+Reply with ONLY the ISIN code (e.g. US09664K6Q16) or the word null. Nothing else."""
+
+_ISIN_RE = re.compile(r'\b([A-Z]{2}[A-Z0-9]{10})\b')
+
+
+def _rescue_isin(pdf_b64: str, client) -> str | None:
+    msg = client.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=32,
+        messages=[{
+            "role": "user",
+            "content": [
+                {"type": "document", "source": {
+                    "type": "base64", "media_type": "application/pdf", "data": pdf_b64}},
+                {"type": "text", "text": _ISIN_RESCUE_PROMPT},
+            ],
+        }],
+    )
+    text = msg.content[0].text.strip()
+    m = _ISIN_RE.search(text)
+    return m.group(1) if m else None
+
+
 def extract_termsheet(pdf_bytes: bytes, api_key: str) -> dict:
     client = anthropic.Anthropic(api_key=api_key)
     pdf_b64 = base64.standard_b64encode(pdf_bytes).decode("utf-8")
@@ -241,7 +271,14 @@ def extract_termsheet(pdf_bytes: bytes, api_key: str) -> dict:
     raw = message.content[0].text.strip()
     raw = re.sub(r"^```(?:json)?\s*", "", raw)
     raw = re.sub(r"\s*```$", "", raw)
-    return json.loads(raw)
+    result = json.loads(raw)
+
+    if not result.get("isin"):
+        rescued = _rescue_isin(pdf_b64, client)
+        if rescued:
+            result["isin"] = rescued
+
+    return result
 
 
 def extract_termsheet_from_path(pdf_path: str, api_key: str) -> dict:
