@@ -157,13 +157,8 @@ def render():
                 moneda = st.selectbox("Currency", moneda_opts,
                     index=moneda_opts.index(mon_val) if mon_val in moneda_opts else 0)
 
-            cp1, cp2 = st.columns(2)
-            with cp1:
-                contraparte = st.text_input("Guarantor / Counterparty",
-                    value=ex.get("contraparte") or ex.get("garante") or "")
-            with cp2:
-                emisor = st.text_input("Issuer",
-                    value=ex.get("emisor") or ex.get("contraparte_derivado") or "")
+            contraparte = st.text_input("Guarantor / Counterparty",
+                value=ex.get("contraparte") or ex.get("garante") or "")
 
             # Underlyings
             st.markdown("**Underlyings**")
@@ -406,7 +401,7 @@ def render():
             "tipo":               tipo,
             "status":             status,
             "contraparte":        contraparte or None,
-            "contraparte_derivado": emisor or None,
+            "contraparte_derivado": None,
             "asset_class":        asset_class,
             "vehiculo":           vehiculo,
             "entidad":            entidad,
