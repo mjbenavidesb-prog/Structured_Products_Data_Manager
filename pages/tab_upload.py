@@ -50,6 +50,7 @@ _ELEM_1_TYPES = [
     "Fixed Coupon",
     "Digital Coupon",
     "Capital Protected Participation",
+    "Dual Directional",
     "Other",
 ]
 _ELEM_2_TYPES = [
@@ -57,8 +58,19 @@ _ELEM_2_TYPES = [
     "Low Strike Put",
     "KI Put (European)",
     "KI Put (American)",
+    "KO Put (ATM)",
     "Vanilla Put (100%)",
     "Low Strike Call",
+    "Other",
+]
+_ELEM_3_TYPES = [
+    "None",
+    "Low Strike Put",
+    "KI Put (European)",
+    "KI Put (American)",
+    "KO Put (ATM)",
+    "Vanilla Put (100%)",
+    "Short Call (OTM)",
     "Other",
 ]
 _POSITIONS = ["Long", "Short"]
@@ -105,12 +117,9 @@ def render():
     _maturity_pre = _to_date(ex.get("fecha_vencimiento"))
     _auto_st = _auto_status(_trade_pre, _maturity_pre) if ex else "POR EJECUTAR"
 
-    # Pre-compute max gain from extracted coupon × years
-    _cupon_pre = _safe_float(ex.get("cupon_contingente") or ex.get("cupon_fijo"), 0.0)
-    if _cupon_pre > 1:
-        _cupon_pre /= 100
-    _anos_pre = _safe_float(ex.get("plazo_meses"), 0.0) / 12
-    _max_gain_pre = f"{_cupon_pre * _anos_pre * 100:.1f}%" if _cupon_pre and _anos_pre else (ex.get("ganancia_maxima") or "")
+    # Max gain: always use what Claude extracted from the termsheet.
+    # Claude writes "Ilimitada" for unlimited, cap% for capped, or coupon×years for coupon products.
+    _max_gain_pre = ex.get("ganancia_maxima") or ""
 
     # ── Form ─────────────────────────────────────────────────────────────────
     with st.form("product_form", border=True):
@@ -265,6 +274,20 @@ def render():
                 elemento_2_posicion = st.selectbox("Posición 2", _POSITIONS,
                     index=_POSITIONS.index(e2p_val) if e2p_val in _POSITIONS else 1)
 
+            e3a, e3b, e3c = st.columns([3, 2, 2])
+            with e3a:
+                e3_val = ex.get("elemento_3_tipo") or "None"
+                e3_idx = _ELEM_3_TYPES.index(e3_val) if e3_val in _ELEM_3_TYPES else 0
+                elemento_3_tipo = st.selectbox("Elemento 3", _ELEM_3_TYPES, index=e3_idx)
+            with e3b:
+                elemento_3_leverage = st.number_input("Leverage 3",
+                    value=_safe_float(ex.get("elemento_3_leverage"), 1.0),
+                    min_value=0.0, max_value=10.0, step=0.001, format="%.3f")
+            with e3c:
+                e3p_val = ex.get("elemento_3_posicion", "Short")
+                elemento_3_posicion = st.selectbox("Posición 3", _POSITIONS,
+                    index=_POSITIONS.index(e3p_val) if e3p_val in _POSITIONS else 1)
+
         # ══════════════════════════════════════════════════════════════════════
         # RIGHT — Manual inputs
         # ══════════════════════════════════════════════════════════════════════
@@ -308,7 +331,7 @@ def render():
 
             ganancia_maxima = st.text_input("Ganancia Máxima",
                 value=_max_gain_pre,
-                help="Cupón anual × años. Auto-calculado, editable.")
+                help="Extraído del termsheet por AI. Ej: '33%', '16.25%', 'Ilimitada'. Editable.")
 
             # AUM by country
             st.markdown("**AUM por País (USD)**")
@@ -422,6 +445,9 @@ def render():
             "elemento_2_tipo": elemento_2_tipo if elemento_2_tipo != "None" else None,
             "elemento_2_leverage": elemento_2_leverage if elemento_2_tipo != "None" else None,
             "elemento_2_posicion": elemento_2_posicion if elemento_2_tipo != "None" else None,
+            "elemento_3_tipo": elemento_3_tipo if elemento_3_tipo != "None" else None,
+            "elemento_3_leverage": elemento_3_leverage if elemento_3_tipo != "None" else None,
+            "elemento_3_posicion": elemento_3_posicion if elemento_3_tipo != "None" else None,
         }
 
         for i, d in enumerate(ac_dates):

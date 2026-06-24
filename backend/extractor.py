@@ -62,6 +62,7 @@ FIELDS TO EXTRACT:
   "factor_participacion": participation rate as decimal or null,
   "trigger_autocall": autocall/knock-out trigger as decimal (1.0 for 100%) or null,
   "fecha_sin_autocall": "Non-call / lock-out end date DD/MM/YYYY or null",
+  "ganancia_maxima": "Maximum gain as a string — read it directly from the termsheet. Examples: '33%', '16.25%', 'Ilimitada', 'Unlimited'. For coupon products multiply annual coupon rate by years ONLY if no cap or explicit max is stated. For capped products use the cap. For unlimited participation products use 'Ilimitada'.",
 
   "fecha_autocall_1": "First knock-out/autocall observation date DD/MM/YYYY or null",
   "fecha_autocall_2": "Second or null",
@@ -98,7 +99,7 @@ CLASSIFICATION HINTS:
 
 ENGINEERING GUIDE — Decompose the product into its derivative building blocks:
 
-ELEMENT 1 (coupon / return generator — investor is typically LONG):
+ELEMENT 1 (return generator — investor is LONG):
 - "Daily Range Accrual": coupon paid proportional to fraction of trading days where each underlying closes >= coupon barrier. Key signal: "Relevant Accrual Fraction" or daily observation of basket.
 - "Phoenix Autocall": conditional coupon at periodic observation dates if worst-of >= coupon barrier; autocalls if >= trigger.
 - "Phoenix with Memory": Phoenix where missed coupons accumulate and are all paid when barrier is next observed.
@@ -106,14 +107,23 @@ ELEMENT 1 (coupon / return generator — investor is typically LONG):
 - "Fixed Coupon": fixed rate regardless of performance.
 - "Digital Coupon": binary — full coupon if above barrier, zero otherwise. Typically one large payment.
 - "Capital Protected Participation": 100% capital floor + participation in upside.
+- "Dual Directional": investor participates 1:1 in upside AND benefits from moderate downside (absolute value of return) within a buffer zone; full loss below barrier. Key signals: "twin win", "dual directional", "buffer", absolute return participation.
 
-ELEMENT 2 (downside exposure sold by investor to fund the coupon — investor is typically SHORT):
-- "Low Strike Put": put struck BELOW 100% of initial price. Investor bears loss when worst-of < strike at maturity. Leverage = 1/strike_pct (e.g. strike=75% → 1/0.75 = 1.333). European observation (final valuation date only). Redemption = Denomination × Final_worst/Strike_worst.
-- "KI Put (European)": put activated only if worst-of <= KI price on the FINAL valuation date. Usually struck at 100%. Leverage = 1.00.
-- "KI Put (American)": put activated if worst-of <= KI price on ANY trading day. Higher risk than European.
-- "Vanilla Put (100%)": standard put struck at 100%, no knock-in, observed at maturity.
-- "Low Strike Call": investor is LONG a call with strike below 100%; provides leveraged upside. Leverage = 1/strike.
-- null: product is fully capital protected — no downside element.
+ELEMENT 2 (secondary derivative block — may be Long or Short):
+- "Low Strike Put": put struck BELOW 100% of initial price. Investor bears loss when worst-of < strike at maturity. Leverage = 1/strike_pct (e.g. strike=75% → 1/0.75 = 1.333). European observation (final valuation date only). Redemption = Denomination × Final_worst/Strike_worst. Position: Short.
+- "KI Put (European)": put activated only if worst-of <= KI price on the FINAL valuation date. Usually struck at 100%. Leverage = 1.00. Position: Short.
+- "KI Put (American)": put activated if worst-of <= KI price on ANY trading day. Higher risk than European. Position: Short.
+- "KO Put (ATM)": ATM put that KNOCKS OUT if worst-of <= barrier on final valuation date. Provides upside from downside within buffer zone. Used in Dual Directional / Twin Win structures. Position: Long.
+- "Vanilla Put (100%)": standard put struck at 100%, no knock-in, observed at maturity. Position: Short.
+- "Low Strike Call": investor is LONG a call with strike below 100%; provides leveraged upside. Leverage = 1/strike. Position: Long.
+- null: fully capital protected — no secondary element.
+
+ELEMENT 3 (third derivative block if needed — used in complex structures):
+- "Low Strike Put": same as element 2 definition. Typically Short in element 3.
+- "KO Put (ATM)": same as element 2 definition.
+- "Vanilla Put (100%)": Short put at 100% that offsets part of element 2 cost. Used in Dual Directional structures.
+- "Short Call (OTM)": investor sells upside beyond a cap level. Provides a maximum gain cap. Position: Short.
+- null: no third element.
 
 LEVERAGE CALCULATION GUIDE:
 - Range Accrual / Phoenix coupon component: 1.00
@@ -122,7 +132,7 @@ LEVERAGE CALCULATION GUIDE:
 - Participation / upside element: the stated participation rate (e.g. 1.33 for 133%)
 - If leverage for an element is not explicitly stated and cannot be calculated, use 1.00
 
-EXAMPLE — Nomura 36M Callable Daily Range Accrual (Strike=75%, KI=75%, European final obs):
+EXAMPLE 1 — Nomura 36M Callable Daily Range Accrual (Strike=75%, KI=75%, European final obs):
 {
   "elemento_1_tipo": "Daily Range Accrual",
   "elemento_1_leverage": 1.00,
@@ -132,9 +142,25 @@ EXAMPLE — Nomura 36M Callable Daily Range Accrual (Strike=75%, KI=75%, Europea
   "elemento_2_posicion": "Short",
   "elemento_3_tipo": null,
   "elemento_3_leverage": null,
-  "elemento_3_posicion": null
+  "elemento_3_posicion": null,
+  "ganancia_maxima": "33.0%"
 }
-Reasoning: leverage = 1/0.75 = 1.333; the KI is observed ONLY at final valuation → European → Low Strike Put.
+Reasoning: leverage = 1/0.75 = 1.333; KI observed only at final valuation → European → Low Strike Put. Max gain = 11% × 3 years = 33%.
+
+EXAMPLE 2 — BNP Paribas Twin Win / Dual Directional (buffer 16.25%, barrier 83.75%, participation 1.00x, no cap):
+{
+  "elemento_1_tipo": "Dual Directional",
+  "elemento_1_leverage": 1.00,
+  "elemento_1_posicion": "Long",
+  "elemento_2_tipo": "KO Put (ATM)",
+  "elemento_2_leverage": 2.00,
+  "elemento_2_posicion": "Long",
+  "elemento_3_tipo": "Vanilla Put (100%)",
+  "elemento_3_leverage": 1.00,
+  "elemento_3_posicion": "Short",
+  "ganancia_maxima": "Ilimitada"
+}
+Reasoning: Long Call ATM (1x) + Long KO Put ATM (2x, KO at 83.75%) + Short Put 100% (1x) = investor gains above AND below initial level within the 16.25% buffer. No upside cap → ganancia_maxima = "Ilimitada".
 
 Return ONLY the JSON object. No markdown, no explanation, no code fences.
 """
