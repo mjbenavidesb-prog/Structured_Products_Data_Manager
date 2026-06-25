@@ -157,6 +157,24 @@ def render():
                 moneda = st.selectbox("Currency", moneda_opts,
                     index=moneda_opts.index(mon_val) if mon_val in moneda_opts else 0)
 
+            # Category (AI-extracted)
+            cat1, cat2 = st.columns(2)
+            with cat1:
+                struct_opts = ["Distribución", "Participación", "Híbrido"]
+                struct_val  = ex.get("tipo_estructura", "")
+                _struct_map = {"Distribucion": "Distribución", "Participacion": "Participación",
+                               "Hibrido": "Híbrido", "Distribución": "Distribución",
+                               "Participación": "Participación", "Híbrido": "Híbrido"}
+                struct_val = _struct_map.get(struct_val, struct_opts[0])
+                tipo_estructura = st.selectbox("Category",  struct_opts,
+                    index=struct_opts.index(struct_val) if struct_val in struct_opts else 0,
+                    help="AI-extracted — Distribution (coupons) or Participation (performance at maturity)")
+            with cat2:
+                estrategia_opts = ["Opportunity", "Capital Protegido"]
+                est_val = ex.get("estrategia", estrategia_opts[0])
+                estrategia = st.selectbox("Strategy", estrategia_opts,
+                    index=estrategia_opts.index(est_val) if est_val in estrategia_opts else 0)
+
             contraparte = st.text_input("Guarantor / Counterparty",
                 value=ex.get("contraparte") or ex.get("garante") or "")
 
@@ -234,12 +252,6 @@ def render():
                 trigger_autocall = st.number_input("Autocall Trigger (%)",
                     value=round(trig_raw * 100, 2), min_value=0.0, max_value=200.0, step=1.0)
 
-            # Asset class
-            ac_opts = cfg.get("asset_classes") or cfg.DEFAULTS["asset_classes"]
-            ac_val  = ex.get("asset_class", ac_opts[0])
-            asset_class = st.selectbox("Asset Class", ac_opts,
-                index=ac_opts.index(ac_val) if ac_val in ac_opts else 0)
-
             # Autocall observation dates
             st.markdown("**Autocall / Knock-Out Observation Dates**")
             n_extracted = sum(1 for i in range(1, 11) if ex.get(f"fecha_autocall_{i}"))
@@ -316,28 +328,58 @@ def render():
                 index=_STATUS_OPTS.index(_auto_st) if _auto_st in _STATUS_OPTS else 0,
                 help="Auto-calculated from trade/maturity dates — override if needed.")
 
-            vehicle_opts = cfg.get("vehicles") or cfg.DEFAULTS["vehicles"]
-            vehiculo = st.selectbox("Vehicle", vehicle_opts)
+            # Asset Class (manual)
+            ac_opts = cfg.get("asset_classes") or cfg.DEFAULTS["asset_classes"]
+            ac_val  = ex.get("asset_class", ac_opts[0])
+            asset_class = st.selectbox("Asset Class", ac_opts,
+                index=ac_opts.index(ac_val) if ac_val in ac_opts else 0)
 
-            entity_opts = cfg.get("entities") or cfg.DEFAULTS["entities"]
-            entidad = st.selectbox("Entity", entity_opts)
+            # ── Configurable standard fields ──────────────────────────────────
+            _rpf_defaults = cfg.DEFAULTS["right_panel_fields"]
+            _rpf = cfg.get("right_panel_fields") or _rpf_defaults
+            _rpf_map = {f["key"]: f for f in _rpf}
 
-            juris_opts = cfg.get("jurisdictions") or cfg.DEFAULTS["jurisdictions"]
-            jurisdiccion = st.selectbox("Jurisdiction", juris_opts)
+            vehiculo = None
+            entidad = None
+            jurisdiccion = None
+            perfil = None
+            tipo_cliente = None
+            dias_habiles_pago = int(cfg.get("business_days_payment") or 3)
 
-            profile_opts = cfg.get("profiles") or cfg.DEFAULTS["profiles"]
-            p_val = ex.get("perfil", profile_opts[0])
-            perfil = st.selectbox("Risk Profile", profile_opts,
-                index=profile_opts.index(p_val) if p_val in profile_opts else 0)
+            def _rpf_enabled(key):
+                return _rpf_map.get(key, {}).get("enabled", True)
 
-            client_opts = cfg.get("client_types") or cfg.DEFAULTS["client_types"]
-            tipo_cliente = st.selectbox("Client Type", client_opts)
+            def _rpf_label(key, default):
+                return _rpf_map.get(key, {}).get("label", default)
 
-            dias_habiles_pago = st.number_input("Business Days to Client Payment",
-                value=int(_safe_float(ex.get("dias_habiles_pago"),
-                    cfg.get("business_days_payment") or 3)),
-                min_value=0, max_value=30, step=1,
-                help="Added to Final Obs. Date to compute client payment date.")
+            if _rpf_enabled("vehiculo"):
+                vehicle_opts = cfg.get("vehicles") or cfg.DEFAULTS["vehicles"]
+                vehiculo = st.selectbox(_rpf_label("vehiculo", "Vehicle"), vehicle_opts)
+
+            if _rpf_enabled("entidad"):
+                entity_opts = cfg.get("entities") or cfg.DEFAULTS["entities"]
+                entidad = st.selectbox(_rpf_label("entidad", "Entity"), entity_opts)
+
+            if _rpf_enabled("jurisdiccion"):
+                juris_opts = cfg.get("jurisdictions") or cfg.DEFAULTS["jurisdictions"]
+                jurisdiccion = st.selectbox(_rpf_label("jurisdiccion", "Jurisdiction"), juris_opts)
+
+            if _rpf_enabled("perfil"):
+                profile_opts = cfg.get("profiles") or cfg.DEFAULTS["profiles"]
+                p_val = ex.get("perfil", profile_opts[0])
+                perfil = st.selectbox(_rpf_label("perfil", "Risk Profile"), profile_opts,
+                    index=profile_opts.index(p_val) if p_val in profile_opts else 0)
+
+            if _rpf_enabled("tipo_cliente"):
+                client_opts = cfg.get("client_types") or cfg.DEFAULTS["client_types"]
+                tipo_cliente = st.selectbox(_rpf_label("tipo_cliente", "Client Type"), client_opts)
+
+            if _rpf_enabled("dias_habiles_pago"):
+                dias_habiles_pago = st.number_input(
+                    _rpf_label("dias_habiles_pago", "Business Days to Payment"),
+                    value=int(_safe_float(ex.get("dias_habiles_pago"),
+                        cfg.get("business_days_payment") or 3)),
+                    min_value=0, max_value=30, step=1)
 
             # AUM by country
             st.markdown("**AUM by Country (USD)**")
@@ -414,6 +456,8 @@ def render():
             "nombre_producto":    nombre_producto.strip(),
             "isin":               isin or None,
             "tipo":               tipo,
+            "tipo_estructura":    tipo_estructura,
+            "estrategia":         estrategia,
             "status":             status,
             "contraparte":        contraparte or None,
             "contraparte_derivado": None,

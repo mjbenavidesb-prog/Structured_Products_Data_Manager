@@ -243,73 +243,108 @@ def render():
             st.rerun()
 
     with tab_lists:
-        st.markdown("Edit the dropdown options available throughout the app.")
-        st.caption("Enter one item per line.")
-
         def list_editor(label, config_key, default_values):
             current = cfg.get(config_key) or default_values
             current_text = "\n".join(current) if isinstance(current, list) else str(current)
-            edited = st.text_area(label, value=current_text, height=160, key=f"list_{config_key}")
+            edited = st.text_area(label, value=current_text, height=130, key=f"list_{config_key}")
             return [v.strip() for v in edited.splitlines() if v.strip()]
 
-        col_a, col_b = st.columns(2)
-        with col_a:
-            vehicles = list_editor("Vehicles", "vehicles", cfg.DEFAULTS["vehicles"])
-            segments = list_editor("Segments", "segments", cfg.DEFAULTS["segments"])
-            asset_classes = list_editor("Asset Classes", "asset_classes", cfg.DEFAULTS["asset_classes"])
+        # ── Section 1: Right panel fields ────────────────────────────────────
+        st.markdown("#### Campos del Panel Derecho (Load Product)")
+        st.caption(
+            "Activa o desactiva cada campo, cambia su nombre visible y edita sus opciones. "
+            "Agrega campos nuevos al final con el botón '+'."
+        )
 
-        with col_b:
-            countries = list_editor("Countries", "countries", cfg.DEFAULTS["countries"])
-            client_types = list_editor("Client Types", "client_types", cfg.DEFAULTS["client_types"])
-            profiles = list_editor("Risk Profiles", "profiles", cfg.DEFAULTS["profiles"])
+        _rpf_defaults = cfg.DEFAULTS["right_panel_fields"]
+        _rpf_saved    = cfg.get("right_panel_fields") or _rpf_defaults
 
-        col_c, col_d = st.columns(2)
-        with col_c:
-            entities = list_editor("Entities / Business Lines", "entities", cfg.DEFAULTS["entities"])
-        with col_d:
-            jurisdictions = list_editor("Jurisdictions", "jurisdictions", cfg.DEFAULTS["jurisdictions"])
+        _options_map = {
+            "vehicles":      cfg.get("vehicles")      or cfg.DEFAULTS["vehicles"],
+            "entities":      cfg.get("entities")      or cfg.DEFAULTS["entities"],
+            "jurisdictions": cfg.get("jurisdictions") or cfg.DEFAULTS["jurisdictions"],
+            "profiles":      cfg.get("profiles")      or cfg.DEFAULTS["profiles"],
+            "client_types":  cfg.get("client_types")  or cfg.DEFAULTS["client_types"],
+        }
+
+        updated_rpf   = []
+        updated_opts  = {}
+
+        for fi, field in enumerate(_rpf_saved):
+            fkey  = field["key"]
+            ftype = field.get("type", "select")
+            ck    = field.get("config_key")
+
+            fc1, fc2, fc3 = st.columns([0.5, 3, 6])
+            with fc1:
+                enabled = st.checkbox("", value=field.get("enabled", True),
+                                      key=f"rpf_en_{fi}", label_visibility="collapsed")
+            with fc2:
+                label = st.text_input("", value=field.get("label", fkey),
+                                      key=f"rpf_lbl_{fi}", label_visibility="collapsed",
+                                      disabled=not enabled)
+            with fc3:
+                if ck and ftype == "select":
+                    cur_opts = _options_map.get(ck, [])
+                    opts_txt = st.text_area("", value=", ".join(cur_opts),
+                                            key=f"rpf_opts_{fi}", height=60,
+                                            label_visibility="collapsed",
+                                            disabled=not enabled,
+                                            help="Opciones separadas por coma")
+                    updated_opts[ck] = [o.strip() for o in opts_txt.split(",") if o.strip()]
+                else:
+                    st.caption("*Campo numérico*")
+
+            updated_rpf.append({
+                "key":        fkey,
+                "label":      label,
+                "config_key": ck,
+                "type":       ftype,
+                "enabled":    enabled,
+            })
 
         st.markdown("---")
-        st.markdown("**Campos Adicionales (Panel Derecho — Load Product)**")
+
+        # ── Section 2: Custom fields ──────────────────────────────────────────
+        st.markdown("#### Campos Personalizados Adicionales")
         st.caption(
-            "Define campos personalizados que aparecen en la sección Manual Input del formulario "
-            "de carga. Formato por línea:  \n"
-            "`Nombre del campo : Opción1, Opción2, Opción3`  \n"
-            "Para campo de texto libre: `Nombre del campo :` (sin opciones).  \n"
-            "Para renombrar un campo existente agrega `:` al final con las opciones deseadas."
+            "Agrega campos nuevos al final del panel derecho. "
+            "Formato: `Nombre : Opción1, Opción2` (selector) o `Nombre :` (texto libre)."
         )
 
         current_cf = cfg.get("custom_fields") or []
-        cf_default = _format_custom_fields(current_cf)
         cf_text = st.text_area(
             "Campos adicionales",
-            value=cf_default,
-            height=200,
+            value=_format_custom_fields(current_cf),
+            height=150,
             key="list_custom_fields",
             label_visibility="collapsed",
             placeholder=(
-                "Advisor : María García, Juan Pérez, Carlos López\n"
-                "Canal de Venta : Digital, Presencial, Referido\n"
+                "Advisor : María García, Juan Pérez\n"
+                "Canal de Venta : Digital, Presencial\n"
                 "Observaciones :"
             ),
         )
         custom_fields_parsed = _parse_custom_fields(cf_text)
 
-        if st.button("Save Lists", type="primary"):
-            cfg.save("vehicles", vehicles)
-            cfg.save("segments", segments)
+        st.markdown("---")
+
+        # ── Section 3: Other classification lists ─────────────────────────────
+        st.markdown("#### Otras Listas de Clasificación")
+
+        col_a, col_b = st.columns(2)
+        with col_a:
+            asset_classes = list_editor("Asset Classes", "asset_classes", cfg.DEFAULTS["asset_classes"])
+            countries     = list_editor("Countries", "countries", cfg.DEFAULTS["countries"])
+        with col_b:
+            segments      = list_editor("Segments", "segments", cfg.DEFAULTS["segments"])
+
+        if st.button("Guardar cambios", type="primary"):
+            cfg.save("right_panel_fields", updated_rpf)
+            for ck, opts in updated_opts.items():
+                cfg.save(ck, opts)
+            cfg.save("custom_fields", custom_fields_parsed)
             cfg.save("asset_classes", asset_classes)
             cfg.save("countries", countries)
-            cfg.save("client_types", client_types)
-            cfg.save("profiles", profiles)
-            cfg.save("entities", entities)
-            cfg.save("jurisdictions", jurisdictions)
-            cfg.save("custom_fields", custom_fields_parsed)
-            st.success("Classification lists saved successfully.")
-
-        if custom_fields_parsed:
-            st.caption(f"**Vista previa** — {len(custom_fields_parsed)} campo(s) personalizado(s):")
-            for f in custom_fields_parsed:
-                t = "Selector" if f["type"] == "select" else "Texto libre"
-                opts = ", ".join(f["options"]) if f["options"] else "—"
-                st.caption(f"• **{f['label']}** ({t}): {opts}")
+            cfg.save("segments", segments)
+            st.success("Configuración guardada correctamente.")

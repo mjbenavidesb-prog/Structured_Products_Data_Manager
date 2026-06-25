@@ -32,6 +32,14 @@ DEFAULTS = {
     "jurisdictions": ["Peru", "Panama", "Colombia", "United States", "Chile"],
     "business_days_payment": 3,
     "custom_fields": [],
+    "right_panel_fields": [
+        {"key": "vehiculo",          "label": "Vehicle",                  "config_key": "vehicles",      "type": "select",  "enabled": True},
+        {"key": "entidad",           "label": "Entity",                   "config_key": "entities",      "type": "select",  "enabled": True},
+        {"key": "jurisdiccion",      "label": "Jurisdiction",             "config_key": "jurisdictions", "type": "select",  "enabled": True},
+        {"key": "perfil",            "label": "Risk Profile",             "config_key": "profiles",      "type": "select",  "enabled": True},
+        {"key": "tipo_cliente",      "label": "Client Type",              "config_key": "client_types",  "type": "select",  "enabled": True},
+        {"key": "dias_habiles_pago", "label": "Business Days to Payment", "config_key": None,            "type": "number",  "enabled": True},
+    ],
 }
 
 
