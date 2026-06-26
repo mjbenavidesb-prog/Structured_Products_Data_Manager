@@ -668,21 +668,24 @@ section[data-testid="stMain"] > div > div > div[data-testid="stVerticalBlock"]
 </div>
 """, unsafe_allow_html=True)
 
-        username = st.text_input("Username", key="login_username")
-        password = st.text_input("Password", type="password", key="login_password")
+        with st.form("login_form", clear_on_submit=False):
+            username = st.text_input("Username")
+            password = st.text_input("Password", type="password")
+            col_a, col_b = st.columns([1, 1])
+            with col_a:
+                sign_in = st.form_submit_button("Sign In", type="primary", use_container_width=True)
+            with col_b:
+                go_back = st.form_submit_button("Back", use_container_width=True)
 
-        col_a, col_b = st.columns([1, 1])
-        with col_a:
-            if st.button("Sign In", type="primary", use_container_width=True):
-                if username == _DEMO_USER and password == _DEMO_PASS:
-                    st.session_state.auth_state = "app"
-                    st.rerun()
-                else:
-                    st.error("Invalid username or password.")
-        with col_b:
-            if st.button("Back", use_container_width=True):
-                st.session_state.auth_state = "landing"
+        if sign_in:
+            if username == _DEMO_USER and password == _DEMO_PASS:
+                st.session_state.auth_state = "app"
                 st.rerun()
+            else:
+                st.error("Invalid username or password.")
+        if go_back:
+            st.session_state.auth_state = "landing"
+            st.rerun()
 
     with right:
         st.markdown("""
