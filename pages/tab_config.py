@@ -109,17 +109,6 @@ def render():
             unsafe_allow_html=True,
         )
 
-        st.markdown("#### API Keys")
-        current_key = cfg.get("claude_api_key") or ""
-        masked = current_key[:8] + "..." if len(current_key) > 8 else ""
-        new_api_key = st.text_input(
-            "Claude API Key",
-            value="",
-            type="password",
-            placeholder=masked or "sk-ant-...",
-            help="Required for termsheet extraction with Claude AI. Stored locally only.",
-        )
-
         if st.button("Save Company Settings", type="primary"):
             cfg.save("company_name", company_name)
             cfg.save("primary_color", primary_color)
@@ -128,8 +117,6 @@ def render():
             cfg.save("accent_color_2", accent_color_2)
             cfg.save("accent_color_3", accent_color_3)
             cfg.save("neutral_color", neutral_color)
-            if new_api_key.strip():
-                cfg.save("claude_api_key", new_api_key.strip())
             st.success("Settings saved. Reload the page to apply colors across all charts.")
 
         # ── Company logo ───────────────────────────────────────────────────────
@@ -265,11 +252,10 @@ def render():
         updated_rpf  = []
         updated_opts = {}
 
-        # Header row
         h1, h2, h3 = st.columns([0.5, 3, 6])
         with h1: st.caption("On")
         with h2: st.caption("Label")
-        with h3: st.caption("Options (comma-separated)")
+        with h3: st.caption("Options")
 
         for fi, field in enumerate(_rpf_saved):
             fkey  = field["key"]
@@ -287,8 +273,16 @@ def render():
                 if ck and ftype == "select":
                     cur_opts = _options_map.get(ck, [])
                     opts_txt = st.text_input("", value=", ".join(cur_opts),
-                                             key=f"rpf_opts_{fi}", label_visibility="collapsed")
+                                             key=f"rpf_opts_{fi}", label_visibility="collapsed",
+                                             help="Comma-separated")
                     updated_opts[ck] = [o.strip() for o in opts_txt.split(",") if o.strip()]
+                elif ck and ftype == "list":
+                    cur_opts = _options_map.get(ck, [])
+                    opts_txt = st.text_area("", value="\n".join(cur_opts),
+                                            key=f"rpf_opts_{fi}", height=68,
+                                            label_visibility="collapsed",
+                                            help="One per line")
+                    updated_opts[ck] = [o.strip() for o in opts_txt.splitlines() if o.strip()]
                 else:
                     st.caption("*(numeric)*")
 
@@ -297,24 +291,8 @@ def render():
                 "config_key": ck, "type": ftype, "enabled": enabled,
             })
 
-        st.markdown("---")
-        st.markdown("#### Otras listas")
-        st.caption("Countries y Segments — usados en los campos de AUM y desglose por segmento.")
-
-        col_a, col_b = st.columns(2)
-        with col_a:
-            cur_c = cfg.get("countries") or cfg.DEFAULTS["countries"]
-            countries_txt = st.text_area("Countries", value="\n".join(cur_c), height=120, key="list_countries")
-            countries = [v.strip() for v in countries_txt.splitlines() if v.strip()]
-        with col_b:
-            cur_s = cfg.get("segments") or cfg.DEFAULTS["segments"]
-            segments_txt = st.text_area("Segments", value="\n".join(cur_s), height=120, key="list_segments")
-            segments = [v.strip() for v in segments_txt.splitlines() if v.strip()]
-
         if st.button("Guardar cambios", type="primary"):
             cfg.save("right_panel_fields", updated_rpf)
             for ck, opts in updated_opts.items():
                 cfg.save(ck, opts)
-            cfg.save("countries", countries)
-            cfg.save("segments", segments)
             st.success("Configuración guardada correctamente.")

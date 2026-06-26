@@ -370,44 +370,49 @@ def render():
                     min_value=0, max_value=30, step=1)
 
             # AUM by country
-            st.markdown("**AUM by Country (USD)**")
-            r1, r2 = st.columns(2)
-            with r1:
-                monto_peru     = st.number_input("Peru", value=0.0, min_value=0.0,
-                    step=10_000.0, format="%.0f")
-                monto_colombia = st.number_input("Colombia", value=0.0, min_value=0.0,
-                    step=10_000.0, format="%.0f")
-            with r2:
-                monto_chile = st.number_input("Chile", value=0.0, min_value=0.0,
-                    step=10_000.0, format="%.0f")
-                monto_usa   = st.number_input("USA", value=0.0, min_value=0.0,
-                    step=10_000.0, format="%.0f")
+            monto_peru = monto_colombia = monto_chile = monto_usa = 0.0
+            if _rpf_enabled("aum_section"):
+                st.markdown(f"**{_rpf_label('aum_section', 'AUM by Country')} (USD)**")
+                r1, r2 = st.columns(2)
+                with r1:
+                    monto_peru     = st.number_input("Peru", value=0.0, min_value=0.0,
+                        step=10_000.0, format="%.0f")
+                    monto_colombia = st.number_input("Colombia", value=0.0, min_value=0.0,
+                        step=10_000.0, format="%.0f")
+                with r2:
+                    monto_chile = st.number_input("Chile", value=0.0, min_value=0.0,
+                        step=10_000.0, format="%.0f")
+                    monto_usa   = st.number_input("USA", value=0.0, min_value=0.0,
+                        step=10_000.0, format="%.0f")
 
             # Segment breakdown
-            st.markdown("**Segment Breakdown (USD)**")
-            sg1, sg2 = st.columns(2)
-            with sg1:
-                monto_bp_peru     = st.number_input("BP Peru", value=0.0, min_value=0.0,
-                    step=10_000.0, format="%.0f")
-                monto_bp_chile    = st.number_input("BP Chile", value=0.0, min_value=0.0,
-                    step=10_000.0, format="%.0f")
-                monto_bp_colombia = st.number_input("BP Colombia", value=0.0, min_value=0.0,
-                    step=10_000.0, format="%.0f")
-                monto_bp_us       = st.number_input("BP US", value=0.0, min_value=0.0,
-                    step=10_000.0, format="%.0f")
-                monto_ria         = st.number_input("RIA", value=0.0, min_value=0.0,
-                    step=10_000.0, format="%.0f")
-            with sg2:
-                monto_w9    = st.number_input("W9", value=0.0, min_value=0.0,
-                    step=10_000.0, format="%.0f")
-                monto_enalta = st.number_input("Enalta", value=0.0, min_value=0.0,
-                    step=10_000.0, format="%.0f")
-                monto_bex   = st.number_input("BEX", value=0.0, min_value=0.0,
-                    step=10_000.0, format="%.0f")
-                monto_mfo   = st.number_input("MFO", value=0.0, min_value=0.0,
-                    step=10_000.0, format="%.0f")
-                monto_tyba  = st.number_input("TYBA", value=0.0, min_value=0.0,
-                    step=10_000.0, format="%.0f")
+            monto_bp_peru = monto_bp_chile = monto_bp_colombia = monto_bp_us = 0.0
+            monto_ria = monto_w9 = monto_enalta = monto_bex = monto_mfo = monto_tyba = 0.0
+            if _rpf_enabled("segment_section"):
+                st.markdown(f"**{_rpf_label('segment_section', 'Segment Breakdown')} (USD)**")
+                sg1, sg2 = st.columns(2)
+                with sg1:
+                    monto_bp_peru     = st.number_input("BP Peru", value=0.0, min_value=0.0,
+                        step=10_000.0, format="%.0f")
+                    monto_bp_chile    = st.number_input("BP Chile", value=0.0, min_value=0.0,
+                        step=10_000.0, format="%.0f")
+                    monto_bp_colombia = st.number_input("BP Colombia", value=0.0, min_value=0.0,
+                        step=10_000.0, format="%.0f")
+                    monto_bp_us       = st.number_input("BP US", value=0.0, min_value=0.0,
+                        step=10_000.0, format="%.0f")
+                    monto_ria         = st.number_input("RIA", value=0.0, min_value=0.0,
+                        step=10_000.0, format="%.0f")
+                with sg2:
+                    monto_w9    = st.number_input("W9", value=0.0, min_value=0.0,
+                        step=10_000.0, format="%.0f")
+                    monto_enalta = st.number_input("Enalta", value=0.0, min_value=0.0,
+                        step=10_000.0, format="%.0f")
+                    monto_bex   = st.number_input("BEX", value=0.0, min_value=0.0,
+                        step=10_000.0, format="%.0f")
+                    monto_mfo   = st.number_input("MFO", value=0.0, min_value=0.0,
+                        step=10_000.0, format="%.0f")
+                    monto_tyba  = st.number_input("TYBA", value=0.0, min_value=0.0,
+                        step=10_000.0, format="%.0f")
 
             # ── Custom fields from Settings ───────────────────────────────────
             custom_field_defs = cfg.get("custom_fields") or []

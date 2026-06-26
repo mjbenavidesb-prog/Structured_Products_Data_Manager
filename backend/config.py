@@ -40,6 +40,8 @@ DEFAULTS = {
         {"key": "perfil",            "label": "Risk Profile",             "config_key": "profiles",      "type": "select",  "enabled": True},
         {"key": "tipo_cliente",      "label": "Client Type",              "config_key": "client_types",  "type": "select",  "enabled": True},
         {"key": "dias_habiles_pago", "label": "Business Days to Payment", "config_key": None,            "type": "number",  "enabled": True},
+        {"key": "aum_section",       "label": "AUM by Country",           "config_key": "countries",     "type": "list",    "enabled": True},
+        {"key": "segment_section",   "label": "Segment Breakdown",        "config_key": "segments",      "type": "list",    "enabled": True},
     ],
 }
 

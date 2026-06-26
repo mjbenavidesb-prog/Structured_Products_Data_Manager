@@ -668,17 +668,19 @@ section[data-testid="stMain"] > div > div > div[data-testid="stVerticalBlock"]
 </div>
 """, unsafe_allow_html=True)
 
-        with st.form("login_form", clear_on_submit=False):
-            username = st.text_input("Username")
-            password = st.text_input("Password", type="password")
-            col_a, col_b = st.columns([1, 1])
-            with col_a:
-                sign_in = st.form_submit_button("Sign In", type="primary", use_container_width=True)
-            with col_b:
-                go_back = st.form_submit_button("Back", use_container_width=True)
+        st.text_input("Username", key="_login_user")
+        st.text_input("Password", type="password", key="_login_pass")
+
+        col_a, col_b = st.columns([1, 1])
+        with col_a:
+            sign_in = st.button("Sign In", type="primary", use_container_width=True, key="_login_signin")
+        with col_b:
+            go_back = st.button("Back", use_container_width=True, key="_login_back")
 
         if sign_in:
-            if username == _DEMO_USER and password == _DEMO_PASS:
+            u = st.session_state.get("_login_user", "").strip()
+            p = st.session_state.get("_login_pass", "").strip()
+            if u == _DEMO_USER and p == _DEMO_PASS:
                 st.session_state.auth_state = "app"
                 st.rerun()
             else:
