@@ -270,19 +270,12 @@ def render():
                 label = st.text_input("", value=field.get("label", fkey),
                                       key=f"rpf_lbl_{fi}", label_visibility="collapsed")
             with fc3:
-                if ck and ftype == "select":
+                if ck and ftype in ("select", "list"):
                     cur_opts = _options_map.get(ck, [])
                     opts_txt = st.text_input("", value=", ".join(cur_opts),
                                              key=f"rpf_opts_{fi}", label_visibility="collapsed",
                                              help="Comma-separated")
                     updated_opts[ck] = [o.strip() for o in opts_txt.split(",") if o.strip()]
-                elif ck and ftype == "list":
-                    cur_opts = _options_map.get(ck, [])
-                    opts_txt = st.text_area("", value="\n".join(cur_opts),
-                                            key=f"rpf_opts_{fi}", height=68,
-                                            label_visibility="collapsed",
-                                            help="One per line")
-                    updated_opts[ck] = [o.strip() for o in opts_txt.splitlines() if o.strip()]
                 else:
                     st.caption("*(numeric)*")
 
