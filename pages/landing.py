@@ -5,6 +5,21 @@ import backend.config as cfg
 _DEMO_USER = "admin"
 _DEMO_PASS = "demo2024"
 
+
+def _try_login():
+    u = st.session_state.get("_login_user", "").strip().lower()
+    p = st.session_state.get("_login_pass", "").strip()
+    if u == _DEMO_USER and p == _DEMO_PASS:
+        st.session_state["_login_error"] = ""
+        st.session_state.auth_state = "app"
+    else:
+        st.session_state["_login_error"] = "Invalid username or password."
+
+
+def _go_back():
+    st.session_state["_login_error"] = ""
+    st.session_state.auth_state = "landing"
+
 _INDIGO  = "#6366F1"
 _INDIGO2 = "#4F46E5"
 _AMBER   = "#F59E0B"
@@ -668,26 +683,21 @@ section[data-testid="stMain"] > div > div > div[data-testid="stVerticalBlock"]
 </div>
 """, unsafe_allow_html=True)
 
-        st.text_input("Username", key="_login_user")
-        st.text_input("Password", type="password", key="_login_pass")
+        st.text_input("Username", key="_login_user", autocomplete="off")
+        st.text_input("Password", type="password", key="_login_pass", autocomplete="new-password")
 
         col_a, col_b = st.columns([1, 1])
         with col_a:
-            sign_in = st.button("Sign In", type="primary", use_container_width=True, key="_login_signin")
+            st.button("Sign In", type="primary", use_container_width=True,
+                      key="_login_signin", on_click=_try_login)
         with col_b:
-            go_back = st.button("Back", use_container_width=True, key="_login_back")
+            st.button("Back", use_container_width=True,
+                      key="_login_back", on_click=_go_back)
 
-        if sign_in:
-            u = st.session_state.get("_login_user", "").strip()
-            p = st.session_state.get("_login_pass", "").strip()
-            if u == _DEMO_USER and p == _DEMO_PASS:
-                st.session_state.auth_state = "app"
-                st.rerun()
-            else:
-                st.error("Invalid username or password.")
-        if go_back:
-            st.session_state.auth_state = "landing"
-            st.rerun()
+        err = st.session_state.get("_login_error", "")
+        if err:
+            st.error(err)
+            st.session_state["_login_error"] = ""
 
     with right:
         st.markdown("""
