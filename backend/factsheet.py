@@ -282,19 +282,36 @@ def _chart_all(df: pd.DataFrame,
     return buf
 
 
-def _chart_worst(series: pd.Series) -> BytesIO:
-    """Worst-of evolution only."""
+def _chart_worst(series: pd.Series,
+                 barrier_pct: float | None = None,
+                 cupon_annual: float | None = None,
+                 accrual_color: str = "#DC2626") -> BytesIO:
+    """Worst-of evolution. Optionally overlays Range Accrual cumulative coupon line."""
     fig, ax = plt.subplots(figsize=(4.5, 3.2))
     fig.patch.set_facecolor("white")
     ax.set_facecolor("white")
 
-    ax.plot(series.index, series.values, color="#1A1A2E", linewidth=1.2)
+    ax.plot(series.index, series.values, color="#1A1A2E", linewidth=1.2,
+            label="Peor Subyacente")
     ax.axhline(100, color="#9CA3AF", linewidth=0.8, linestyle="--", alpha=0.6)
+
+    accrual = None
+    if barrier_pct is not None and cupon_annual and not series.empty:
+        daily_rate = cupon_annual / 252
+        above = (series >= barrier_pct).astype(float)
+        accrual = 100 + above.cumsum() * daily_rate
+        ax.plot(accrual.index, accrual.values,
+                color=accrual_color, linewidth=1.8, zorder=5,
+                label="Cupón acumulado RA")
 
     vals = series.dropna().values
     if len(vals):
-        ymin = max(0.0, float((vals.min() - 10) // 5) * 5)
-        ymax = float(np.ceil((vals.max() + 5) / 5.0) * 5)
+        data_min = float(vals.min())
+        data_max = float(vals.max())
+        if accrual is not None:
+            data_max = max(data_max, float(accrual.max()))
+        ymin = max(0.0, float((data_min - 10) // 5) * 5)
+        ymax = float(np.ceil((data_max + 5) / 5.0) * 5)
         ax.set_ylim(ymin, ymax)
 
     ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda v, _: f"{v:.0f}%"))
@@ -306,6 +323,9 @@ def _chart_worst(series: pd.Series) -> BytesIO:
     ax.spines[["left","bottom"]].set_color("#E5E7EB")
     ax.tick_params(colors="#6B7280", length=3)
     ax.grid(axis="y", linestyle="--", alpha=0.3, linewidth=0.5)
+    if accrual is not None:
+        ax.legend(fontsize=9, loc="upper left", framealpha=0.8,
+                  handlelength=1.5, borderpad=0.4, labelspacing=0.3)
 
     fig.tight_layout(pad=0.4)
     buf = BytesIO()
@@ -1188,6 +1208,15 @@ def generate_factsheet_pdf(product: dict, event_type: str, company_name: str,
     cutoff = actual_ac or fecha_vencto or date.today()
     perf_df, worst_series = _fetch_perf(unds, fecha_inicio, cutoff)
 
+    # Fill missing spots from perf_df last row (normalized * strike / 100 = actual price)
+    if not perf_df.empty:
+        last_row = perf_df.iloc[-1]
+        for i, u in enumerate(unds, 1):
+            if not spots.get(u) and u in last_row.index:
+                strike_val = strikes.get(u)
+                if strike_val:
+                    spots[u] = round(float(strike_val) * float(last_row[u]) / 100, 4)
+
     # ── Rendimientos ──────────────────────────────────────────────────────────
     rendimientos: dict[str, float] = {}
     worst_u, worst_v = None, None
@@ -1356,12 +1385,7 @@ def generate_factsheet_pdf(product: dict, event_type: str, company_name: str,
     y0, hh = _YP["main"]
     _build_caract_table(slide, _ML, y0, _LW, caract_rows, PRI)
     if not perf_df.empty:
-        _embed(slide, _chart_all(
-            perf_df,
-            barrier_pct=barrier_cupon if cupon_annual else None,
-            cupon_annual=cupon_annual if cupon_annual else None,
-            accrual_color=secondary,
-        ), _RX, y0, _RW, hh)
+        _embed(slide, _chart_all(perf_df), _RX, y0, _RW, hh)
 
     # 7. Summary table
     y0, hh = _YP["sumtbl"]
@@ -1394,7 +1418,12 @@ def generate_factsheet_pdf(product: dict, event_type: str, company_name: str,
         _build_coupon_table(slide, _ML, y0, btm_lw, coupon_rows, total_coupon_str, PRI)
 
     if not worst_series.empty:
-        _embed(slide, _chart_worst(worst_series), btm_rx, y0, btm_rw, hh)
+        _embed(slide, _chart_worst(
+            worst_series,
+            barrier_pct=barrier_cupon if cupon_annual else None,
+            cupon_annual=cupon_annual if cupon_annual else None,
+            accrual_color=secondary,
+        ), btm_rx, y0, btm_rw, hh)
 
     # 11. Footnote / disclaimer
     y0, hh = _YP["footnote"]
