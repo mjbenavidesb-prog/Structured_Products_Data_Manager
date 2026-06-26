@@ -115,8 +115,12 @@ def _fetch_missing_strikes(data: dict) -> tuple[dict, list[str]]:
         bbg = data.get(f"underlying_{i}")
         if not bbg:
             continue
-        if data.get(f"strike_{i}") not in (None, "", 0, 0.0):
-            continue
+        existing = data.get(f"strike_{i}")
+        try:
+            if existing is not None and float(existing) > 0:
+                continue  # valid numeric strike already present
+        except (TypeError, ValueError):
+            pass  # TBD, N/A, or any non-numeric string → fetch from yfinance
 
         yf_tick = _BBG_TO_YF.get(str(bbg).upper(), bbg)
         try:
