@@ -8,7 +8,7 @@ Right panel (manual user input): identity, classification, amounts, segment brea
 import json as _json
 import os
 import streamlit as st
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 import backend.config as cfg
 from backend.database import insert_product, get_all_products
 from backend.extractor import extract_termsheet
@@ -88,6 +88,55 @@ _ELEM_3_TYPES = [
 _POSITIONS   = ["Long", "Short"]
 _STATUS_OPTS = ["POR EJECUTAR", "VIGENTE", "AUTOCALL", "VENCIDO", "CANCELADO"]
 
+# Bloomberg ticker → yfinance ticker (ETFs are the same; only indices differ)
+_BBG_TO_YF = {
+    "SPX": "^GSPC", "INDU": "^DJI", "RTY": "^RUT", "NDX": "^NDX",
+    "SX5E": "^STOXX50E", "STOXX50E": "^STOXX50E", "NKY": "^N225",
+    "UKX": "^FTSE", "DAX": "^GDAXI", "CAC": "^FCHI", "SMI": "^SSMI",
+    "HSI": "^HSI", "KOSPI": "^KS11", "NIFTY": "^NSEI", "IBEX": "^IBEX",
+}
+
+
+def _fetch_missing_strikes(data: dict) -> tuple[dict, list[str]]:
+    """Fill strike_N fields that are null/0 using yfinance prices on the strike date."""
+    import yfinance as yf
+
+    raw_date = data.get("fecha_strike") or data.get("fecha_inicio")
+    if not raw_date:
+        return data, []
+
+    try:
+        strike_dt = datetime.strptime(str(raw_date).strip(), "%d/%m/%Y").date()
+    except (ValueError, TypeError):
+        return data, []
+
+    fetched: list[str] = []
+    for i in range(1, 5):
+        bbg = data.get(f"underlying_{i}")
+        if not bbg:
+            continue
+        if data.get(f"strike_{i}") not in (None, "", 0, 0.0):
+            continue
+
+        yf_tick = _BBG_TO_YF.get(str(bbg).upper(), bbg)
+        try:
+            end_dt = strike_dt + timedelta(days=7)
+            hist = yf.download(
+                yf_tick,
+                start=strike_dt.isoformat(),
+                end=end_dt.isoformat(),
+                progress=False,
+                auto_adjust=True,
+            )
+            if not hist.empty:
+                price = float(hist["Close"].iloc[0])
+                data[f"strike_{i}"] = round(price, 4)
+                fetched.append(f"{bbg}: {price:,.4f}")
+        except Exception:
+            pass
+
+    return data, fetched
+
 
 def render():
     st.subheader("Load Product")
@@ -106,8 +155,12 @@ def render():
                 with st.spinner("Reading termsheet..."):
                     try:
                         result = extract_termsheet(uploaded.read(), api_key, filename=uploaded.name)
+                        result, fetched_strikes = _fetch_missing_strikes(result)
                         st.session_state["extracted"] = result
-                        st.success("Extraction complete — review and correct the fields below.")
+                        msg = "Extraction complete — review and correct the fields below."
+                        if fetched_strikes:
+                            msg += f" Initial levels from yfinance: {', '.join(fetched_strikes)}."
+                        st.success(msg)
                     except Exception as e:
                         st.error(f"Extraction failed: {e}")
     with clr_col:
