@@ -193,6 +193,19 @@ def render():
     _max_gain_pre = ex.get("ganancia_maxima") or ""
     _plazo_pre    = int(_safe_float(ex.get("plazo_meses")))
 
+    # Underlying Structure — outside form so selecting "Basket" immediately shows weights
+    _fmt_opts = ["Worst of", "Individual", "Basket"]
+    _fmt_ex   = ex.get("formato_subyacente", "Worst of") if ex else "Worst of"
+    _ex_sig   = str(ex.get("isin") or ex.get("nombre_producto") or "")
+    if st.session_state.get("_fmt_sig") != _ex_sig:
+        st.session_state["_fmt_sig"]    = _ex_sig
+        st.session_state["_upload_fmt"] = _fmt_ex
+    formato_subyacente = st.selectbox(
+        "Underlying Structure",
+        _fmt_opts,
+        key="_upload_fmt",
+    )
+
     # ── Form ─────────────────────────────────────────────────────────────────
     with st.form("product_form", border=True):
         left, right = st.columns([11, 9])
@@ -248,10 +261,31 @@ def render():
                 s4 = st.number_input("U4 Initial Level", value=_safe_float(ex.get("strike_4")),
                     min_value=0.0, step=0.01, format="%.4f")
 
-            fmt_opts = ["Worst of", "Individual", "Basket"]
-            fmt_val  = ex.get("formato_subyacente", "Worst of")
-            formato_subyacente = st.selectbox("Underlying Structure", fmt_opts,
-                index=fmt_opts.index(fmt_val) if fmt_val in fmt_opts else 0)
+            # Weights — only shown when Underlying Structure is Basket
+            p1 = p2 = p3 = p4 = None
+            if st.session_state.get("_upload_fmt", "Worst of") == "Basket":
+                st.markdown("**Weights (%)**")
+                wc1, wc2, wc3, wc4 = st.columns(4)
+                with wc1:
+                    _w = _safe_float(ex.get("peso_1"), 0.0)
+                    p1 = st.number_input("W1 %", min_value=0.0, max_value=100.0, step=1.0,
+                        format="%.2f",
+                        value=round(_w * 100 if 0 < _w <= 1.0 else (25.0 if _w <= 0 else _w), 2))
+                with wc2:
+                    _w = _safe_float(ex.get("peso_2"), 0.0)
+                    p2 = st.number_input("W2 %", min_value=0.0, max_value=100.0, step=1.0,
+                        format="%.2f",
+                        value=round(_w * 100 if 0 < _w <= 1.0 else (25.0 if _w <= 0 else _w), 2))
+                with wc3:
+                    _w = _safe_float(ex.get("peso_3"), 0.0)
+                    p3 = st.number_input("W3 %", min_value=0.0, max_value=100.0, step=1.0,
+                        format="%.2f",
+                        value=round(_w * 100 if 0 < _w <= 1.0 else (25.0 if _w <= 0 else _w), 2))
+                with wc4:
+                    _w = _safe_float(ex.get("peso_4"), 0.0)
+                    p4 = st.number_input("W4 %", min_value=0.0, max_value=100.0, step=1.0,
+                        format="%.2f",
+                        value=round(_w * 100 if 0 < _w <= 1.0 else (25.0 if _w <= 0 else _w), 2))
 
             # Key Dates
             st.markdown("**Key Dates**")
@@ -550,6 +584,10 @@ def render():
             "strike_2":           s2 if u2 and s2 > 0 else None,
             "strike_3":           s3 if u3 and s3 > 0 else None,
             "strike_4":           s4 if u4 and s4 > 0 else None,
+            "peso_1":             round(p1 / 100, 6) if p1 is not None else None,
+            "peso_2":             round(p2 / 100, 6) if p2 is not None else None,
+            "peso_3":             round(p3 / 100, 6) if p3 is not None else None,
+            "peso_4":             round(p4 / 100, 6) if p4 is not None else None,
             "formato_subyacente": formato_subyacente,
             "cupon_contingente":  cupon_contingente / 100,
             "barrera_cupon":      barrera_cupon / 100 if barrera_cupon else None,
